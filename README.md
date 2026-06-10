@@ -99,3 +99,38 @@ Scrapes are logged using the following schema:
 - `scraped_at` (DATETIME): UTC timestamp.
 - `status` (TEXT): `success` or `failed`.
 - `error` (TEXT): Exception details if scraping failed.
+
+
+
+WebScraper 1-Week Sprint Tasks
+ Day 1: Setup & Scraper Core
+ Initialize workspace, create package.json with ESM, install dependencies
+ Create scraper.js core fetching logic with Axios
+ Create HTML DOM cleaning logic using Cheerio
+ Implement smart content root detection fallbacks
+ Convert HTML to clean Markdown with Turndown
+ Day 2: DB Layer & CLI Commands
+ Initialize SQLite database schema (scrapes and profiles tables) in storage.js
+ Implement query/insert database helper methods
+ Implement CLI entry point in cli.js with Commander.js
+ Add subcommands: scrape, batch, list, show, export
+ Day 3: Express & Playwright Server
+ Install Playwright and set up browser launcher
+ Implement local Express backend bridge in ui/server.js
+ Implement endpoint to serve target page contents and screenshots
+ Day 4: React UI & Selector Gen
+ Bootstrap React Vite application under ui/
+ Build element highlighting picker dashboard (App.jsx and Picker.jsx)
+ Integrate visual click-to-selector generation
+ Connect profile saving from UI to SQLite and support in CLI scrape --profile <name>
+ Day 5: LLM API & Zod Validation
+ Integrate Anthropic SDK in llm.js
+ Define Zod validation schemas (article, product, event)
+ Connect CLI flags for LLM processing (--llm, --extract, --summarize, --schema)
+ Day 6: Grouping, Categorization & Testing
+ Implement batch categorization and grouping logic (--group)
+ Run manual integration tests on 10+ real-world URLs
+ Day 7: Documentation & Polish
+ Write user guide in README.md
+ Final visual design adjustments and error boundary checks
+ Create walkthrough documentation
