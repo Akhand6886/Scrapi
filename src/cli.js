@@ -1,11 +1,6 @@
 #!/usr/bin/env node
 
-// Polyfill for Node.js < 20 where File is not global
-import { File } from 'buffer';
-if (!globalThis.File) {
-  globalThis.File = File;
-}
-
+import './polyfill.js';
 import fs from 'fs/promises';
 import path from 'path';
 import { Command } from 'commander';
