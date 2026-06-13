@@ -263,3 +263,86 @@ export async function summarizeContent(markdown) {
   const summaryLines = lines.slice(0, 3).map(line => `• ${line.substring(0, 120)}...`);
   return `[Offline Summary Fallback]\n${summaryLines.join('\n')}`;
 }
+
+/**
+ * Clusters multiple scraped pages by topic or theme.
+ * Graces fallback: Anthropic Claude -> Local LLM -> Offline Keyword/Domain rule-based grouper.
+ * @param {Array<object>} scrapes - List of { url, title, markdown }
+ * @returns {Promise<object>} Map of categories to lists of URLs
+ */
+export async function groupScrapes(scrapes) {
+  if (scrapes.length === 0) return {};
+
+  const itemsDescription = scrapes.map((s, idx) => {
+    const snippet = s.markdown ? s.markdown.substring(0, 300).replace(/\n/g, ' ') : '';
+    return `[Item #${idx}] URL: ${s.url}\nTitle: ${s.title || 'Unknown'}\nSnippet: ${snippet}\n`;
+  }).join('\n');
+
+  const prompt = `
+We have scraped a batch of pages. Please group them into logical categories based on their titles and content snippets.
+Return a single JSON object where keys are category names (short, descriptive) and values are arrays of URLs belonging to that category.
+
+Scraped Pages:
+${itemsDescription}
+
+Return only the raw JSON mapping.
+`;
+
+  const schemaStr = `{"CategoryName": ["url1", "url2"]}`;
+
+  // 1. Try Anthropic SDK
+  if (process.env.ANTHROPIC_API_KEY && process.env.ANTHROPIC_API_KEY !== 'your_key_here') {
+    try {
+      console.log(`🧠 Querying Anthropic Claude to group and categorize batch scrapes...`);
+      const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+      const response = await anthropic.messages.create({
+        model: 'claude-3-haiku-20240307',
+        max_tokens: 1000,
+        temperature: 0.1,
+        system: `You are an analytics assistant. You return ONLY a valid JSON object mapping category strings to arrays of matching page URLs. Example: ${schemaStr}`,
+        messages: [{ role: 'user', content: prompt }]
+      });
+
+      return JSON.parse(response.content[0].text.trim());
+    } catch (err) {
+      console.warn(`⚠️ Anthropic batch grouping failed: ${err.message}. Trying local fallback...`);
+    }
+  }
+
+  // 2. Try Local LLM
+  if (process.env.LOCAL_LLM_ENDPOINT) {
+    try {
+      const response = await queryLocalLlm(prompt, schemaStr);
+      return response;
+    } catch (err) {
+      console.warn(`⚠️ Local LLM batch grouping failed: ${err.message}.`);
+    }
+  }
+
+  // 3. Fallback: Rule-Based Categorizer (by Domain or Heuristics)
+  console.log(`ℹ️ Grouping batch scrapes offline using domain-based categorization.`);
+  const groups = {};
+  scrapes.forEach(s => {
+    let category = 'General';
+    try {
+      const hostname = new URL(s.url).hostname;
+      // Clean domain name (e.g. news.ycombinator.com -> ycombinator.com)
+      const parts = hostname.split('.');
+      if (parts.length >= 2) {
+        category = parts.slice(-2).join('.');
+      } else {
+        category = hostname;
+      }
+      category = category.charAt(0).toUpperCase() + category.slice(1);
+    } catch (e) {
+      category = 'Local/Unstructured';
+    }
+
+    if (!groups[category]) {
+      groups[category] = [];
+    }
+    groups[category].push(s.url);
+  });
+
+  return groups;
+}
