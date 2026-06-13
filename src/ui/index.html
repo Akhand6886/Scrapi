@@ -82,6 +82,9 @@
       const [includeImages, setIncludeImages] = useState(false);
       const [noMeta, setNoMeta] = useState(false);
       const [renderMode, setRenderMode] = useState('static'); // 'static' | 'dynamic'
+      const [discoveredUrls, setDiscoveredUrls] = useState([]);
+      const [discovering, setDiscovering] = useState(false);
+      const [batchProgress, setBatchProgress] = useState(null); // { active: false, current: 0, total: 0, succeeded: 0, failed: 0 }
 
       // Loading/UI states
       const [activeTab, setActiveTab] = useState('iframe'); // 'iframe' | 'markdown'
@@ -196,6 +199,110 @@
           showToast(err.message, 'error');
         } finally {
           setLoading(false);
+        }
+      };
+
+      // Discover links on target page matching selector
+      const handleDiscoverLinks = async () => {
+        if (!url) {
+          showToast('Please enter a target URL first.', 'error');
+          return;
+        }
+        if (!selector) {
+          showToast('Please select an anchor link first by clicking on it.', 'error');
+          return;
+        }
+        
+        setDiscovering(true);
+        setDiscoveredUrls([]);
+        try {
+          const res = await fetch('/api/discover', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              url,
+              selector,
+              mode: renderMode
+            })
+          });
+          const data = await res.json();
+          if (res.ok) {
+            setDiscoveredUrls(data.urls || []);
+            showToast(`Discovered ${data.urls ? data.urls.length : 0} links!`, 'success');
+          } else {
+            showToast(data.error || 'Failed to discover links.', 'error');
+          }
+        } catch (err) {
+          showToast(err.message, 'error');
+        } finally {
+          setDiscovering(false);
+        }
+      };
+
+      // Run live batch scrape with parallel concurrency of 2 in frontend
+      const handleStartBatchScrape = async () => {
+        if (discoveredUrls.length === 0) return;
+        
+        const total = discoveredUrls.length;
+        setBatchProgress({
+          active: true,
+          current: 0,
+          total: total,
+          succeeded: 0,
+          failed: 0
+        });
+        setLoading(true);
+
+        const urlsQueue = [...discoveredUrls];
+        let currentIdx = 0;
+        let succeeded = 0;
+        let failed = 0;
+
+        const runVisualWorker = async () => {
+          while (urlsQueue.length > 0) {
+            const targetUrl = urlsQueue.shift();
+            currentIdx++;
+            
+            setBatchProgress(prev => ({
+              ...prev,
+              current: currentIdx
+            }));
+
+            try {
+              const res = await fetch('/api/scrape', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  url: targetUrl,
+                  selector: 'auto', // use auto-detector for final body extraction on subpages
+                  images: includeImages,
+                  noMeta: noMeta
+                })
+              });
+              if (res.ok) {
+                succeeded++;
+                setBatchProgress(prev => ({ ...prev, succeeded }));
+              } else {
+                failed++;
+                setBatchProgress(prev => ({ ...prev, failed }));
+              }
+            } catch (err) {
+              failed++;
+              setBatchProgress(prev => ({ ...prev, failed }));
+            }
+          }
+        };
+
+        // Run 2 parallel scraping workers
+        try {
+          await Promise.all([runVisualWorker(), runVisualWorker()]);
+          showToast(`Live batch scrape completed! ${succeeded} succeeded, ${failed} failed.`, 'success');
+          loadData(); // reload scrapes logs history
+        } catch (e) {
+          showToast('Live batch scrape completed with errors.', 'error');
+        } finally {
+          setLoading(false);
+          setBatchProgress(null);
         }
       };
 
@@ -424,7 +531,10 @@
                       class="flex-1 px-3 py-2 bg-dark-950/80 border border-white/10 rounded-lg text-sm text-emerald-400 font-mono focus:outline-none focus:border-blue-500 transition-colors"
                     />
                     <button 
-                      onClick={() => setSelector('')}
+                      onClick={() => {
+                        setSelector('');
+                        setDiscoveredUrls([]);
+                      }}
                       class="px-2.5 bg-white/5 hover:bg-white/10 rounded-lg border border-white/10 text-gray-400 transition-colors"
                       title="Clear Selector"
                     >
@@ -432,6 +542,49 @@
                     </button>
                   </div>
                 </div>
+
+                {/* Link Discovery controls */}
+                <div class="flex space-x-2">
+                  <button 
+                    onClick={handleDiscoverLinks} 
+                    disabled={loading || discovering || !selector}
+                    class="flex-1 py-1.5 bg-brand-600/80 hover:bg-brand-600 disabled:opacity-40 text-white rounded-lg text-xs font-semibold transition-all active:scale-95 flex items-center justify-center border border-brand-500/20"
+                    title="Extract all links on page matching CSS Selector"
+                  >
+                    {discovering ? '🔍 Searching...' : '🔍 Discover Links'}
+                  </button>
+                </div>
+
+                {/* Discovered URLs list & live scrape */}
+                {discoveredUrls.length > 0 && (
+                  <div class="space-y-2.5 bg-white/5 border border-white/5 p-3 rounded-xl">
+                    <div class="flex justify-between items-center">
+                      <span class="text-xs font-bold text-gray-300">📄 {discoveredUrls.length} Links Found</span>
+                      <button
+                        onClick={() => setDiscoveredUrls([])}
+                        class="text-[10px] text-gray-500 hover:text-gray-300"
+                      >
+                        Clear
+                      </button>
+                    </div>
+                    
+                    <div class="max-h-24 overflow-y-auto custom-scrollbar space-y-1 p-1.5 bg-dark-950/80 rounded-lg border border-white/5">
+                      {discoveredUrls.map((u, i) => (
+                        <div key={i} class="text-[9px] text-gray-400 truncate font-mono" title={u}>
+                          • {u}
+                        </div>
+                      ))}
+                    </div>
+
+                    <button
+                      onClick={handleStartBatchScrape}
+                      disabled={loading || batchProgress?.active}
+                      class="w-full py-1.5 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white rounded-lg text-xs font-semibold transition-all flex items-center justify-center active:scale-95 shadow-lg"
+                    >
+                      ⚡ Start Live Batch Scrape
+                    </button>
+                  </div>
+                )}
 
                 <div class="space-y-3">
                   <label class="text-xs text-gray-400 font-medium">Save As Profile</label>
@@ -551,7 +704,25 @@
                   <div class="relative w-16 h-16 mb-4">
                     <div class="absolute inset-0 rounded-full border-4 border-blue-500/20 border-t-blue-500 animate-spin"></div>
                   </div>
-                  <p class="text-sm font-semibold text-blue-400 tracking-wider animate-pulse">PROCESSING SITE...</p>
+                  {batchProgress ? (
+                    <div class="text-center space-y-2 px-6">
+                      <p class="text-sm font-semibold text-emerald-400 tracking-wider animate-pulse uppercase">
+                        BATCH SCRAPING PROGRESS
+                      </p>
+                      <p class="text-xs text-gray-400 font-mono">
+                        URL {batchProgress.current} / {batchProgress.total} 
+                        ({batchProgress.succeeded} ok, {batchProgress.failed} failed)
+                      </p>
+                      <div class="w-48 h-1.5 bg-white/10 rounded-full overflow-hidden mx-auto mt-2">
+                        <div 
+                          class="h-full bg-emerald-500 transition-all duration-300" 
+                          style={{ width: `${(batchProgress.current / batchProgress.total) * 100}%` }}
+                        ></div>
+                      </div>
+                    </div>
+                  ) : (
+                    <p class="text-sm font-semibold text-blue-400 tracking-wider animate-pulse">PROCESSING SITE...</p>
+                  )}
                 </div>
               )}
 
