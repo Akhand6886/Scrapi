@@ -191,6 +191,7 @@ program
   .option('--output-json', 'Save structured JSON alongside Markdown', false)
   .option('--no-cache', 'Bypass HTTP cache and force fresh request', false)
   .option('--group', 'Group and categorize batch scraped pages dynamically', false)
+  .option('-c, --concurrency <number>', 'Number of parallel scraper workers', '2')
   .action(async (file, options) => {
     await initStorage(undefined, options.output);
     const spinner = ora(`Reading URLs from ${file}...`).start();
@@ -199,20 +200,34 @@ program
       const content = await fs.readFile(file, 'utf-8');
       const urls = content.split('\n').map(line => line.trim()).filter(line => line.length > 0 && !line.startsWith('#'));
       
-      spinner.succeed(`Found ${urls.length} URLs in batch file.`);
+      const concurrency = Math.max(1, parseInt(options.concurrency, 10) || 2);
+      spinner.succeed(`Found ${urls.length} URLs in batch file. Starting batch run (Concurrency: ${concurrency}).`);
       
       const successfullyScraped = [];
-      for (let i = 0; i < urls.length; i++) {
-        console.log(chalk.gray(`\n[${i + 1}/${urls.length}]`));
-        const res = await performScrape(urls[i], options);
-        if (res) {
-          successfullyScraped.push(res);
+      const queue = [...urls];
+      let urlIndex = 0;
+
+      const runWorker = async () => {
+        while (queue.length > 0) {
+          const url = queue.shift();
+          const currentIdx = ++urlIndex;
+          console.log(chalk.gray(`\n[Worker] [${currentIdx}/${urls.length}] Starting scrape of: ${url}`));
+          
+          const res = await performScrape(url, options);
+          if (res) {
+            successfullyScraped.push(res);
+          }
+          
+          // Polite delay before next scrape in this worker channel
+          if (queue.length > 0) {
+            await new Promise(resolve => setTimeout(resolve, 1500));
+          }
         }
-        // Short delay between requests to be polite
-        if (i < urls.length - 1) {
-          await new Promise(resolve => setTimeout(resolve, 1500));
-        }
-      }
+      };
+
+      // Run workers in parallel
+      const workers = Array.from({ length: Math.min(concurrency, urls.length) }, () => runWorker());
+      await Promise.all(workers);
 
       // Grouping logic if requested
       if (options.llm && options.group && successfullyScraped.length > 0) {
