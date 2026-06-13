@@ -18,6 +18,19 @@ app.use(express.json());
 // Initialize SQLite database
 initStorage();
 
+// Shared long-lived headless browser instance to reduce CPU and memory usage
+let sharedBrowser = null;
+
+async function getSharedBrowser() {
+  if (!sharedBrowser) {
+    sharedBrowser = await chromium.launch({ headless: true });
+    sharedBrowser.on('disconnected', () => {
+      sharedBrowser = null;
+    });
+  }
+  return sharedBrowser;
+}
+
 // Serve the picker script static endpoint
 app.get('/api/picker.js', async (req, res) => {
   try {
@@ -75,10 +88,10 @@ app.get('/api/proxy', async (req, res) => {
     return res.status(400).send('Missing url parameter');
   }
 
-  let browser;
+  let context;
   try {
-    browser = await chromium.launch({ headless: true });
-    const context = await browser.newContext({
+    const browser = await getSharedBrowser();
+    context = await browser.newContext({
       userAgent: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
     });
     const page = await context.newPage();
@@ -117,8 +130,8 @@ app.get('/api/proxy', async (req, res) => {
   } catch (err) {
     res.status(500).send(`Error proxying page: ${err.message}`);
   } finally {
-    if (browser) {
-      await browser.close();
+    if (context) {
+      await context.close();
     }
   }
 });
@@ -161,9 +174,14 @@ app.post('/api/scrape', async (req, res) => {
 });
 
 // POST kill/shutdown server
-app.post('/api/kill', (req, res) => {
+app.post('/api/kill', async (req, res) => {
   res.json({ success: true, message: 'Server is shutting down...' });
   console.log('🛑 Shutting down server as requested from Web UI...');
+  if (sharedBrowser) {
+    try {
+      await sharedBrowser.close();
+    } catch (e) {}
+  }
   setTimeout(() => {
     process.exit(0);
   }, 1000);
@@ -172,7 +190,34 @@ app.post('/api/kill', (req, res) => {
 // Serve frontend files statically
 app.use(express.static(__dirname));
 
+const closeBrowser = async () => {
+  if (sharedBrowser) {
+    console.log('Closing shared headless browser...');
+    try {
+      await sharedBrowser.close();
+    } catch (e) {}
+    sharedBrowser = null;
+  }
+};
+
+process.on('SIGINT', async () => {
+  await closeBrowser();
+  process.exit(0);
+});
+
+process.on('SIGTERM', async () => {
+  await closeBrowser();
+  process.exit(0);
+});
+
 const PORT = process.env.PORT || 3001;
-app.listen(PORT, () => {
+app.listen(PORT, async () => {
   console.log(`🚀 Scrapi Local Server running on http://localhost:${PORT}`);
+  // Warm up the browser background-wise
+  try {
+    await getSharedBrowser();
+    console.log('🌐 Shared headless browser instance warmed up and ready.');
+  } catch (e) {
+    console.error('⚠️ Failed to pre-warm headless browser:', e.message);
+  }
 });
