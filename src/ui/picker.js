@@ -113,12 +113,17 @@
     // Generate selector
     const selector = generateCssSelector(target);
 
+    const classAttr = target.getAttribute('class') || '';
+    const classesList = classAttr.trim().split(/\s+/).filter(c => c && !c.startsWith('scrapi-'));
+
     // Send selector details to parent window (React UI)
     window.parent.postMessage({
       type: 'ELEMENT_SELECTED',
       selector: selector,
       tagName: target.tagName.toLowerCase(),
-      textSnippet: target.innerText ? target.innerText.substring(0, 100).trim() : ''
+      textSnippet: target.innerText ? target.innerText.substring(0, 100).trim() : '',
+      classes: classesList,
+      parentTagName: target.parentElement ? target.parentElement.tagName.toLowerCase() : null
     }, '*');
   }, true);
 
