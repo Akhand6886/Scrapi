@@ -1,6 +1,7 @@
 import fs from 'fs/promises';
 import path from 'path';
 import Database from 'better-sqlite3';
+import zlib from 'zlib';
 
 let db;
 
@@ -49,6 +50,14 @@ export async function initStorage(dbDir = './data', outputDir = './output') {
       html TEXT NOT NULL,
       etag TEXT,
       last_modified TEXT,
+      cached_at DATETIME NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS llm_cache (
+      content_hash TEXT PRIMARY KEY,
+      schema_used TEXT,
+      instruction TEXT,
+      result TEXT,
       cached_at DATETIME NOT NULL
     );
   `);
@@ -252,7 +261,18 @@ export function getCachedPage(url) {
   const stmt = db.prepare(`
     SELECT * FROM http_cache WHERE url = ?
   `);
-  return stmt.get(url);
+  const cached = stmt.get(url);
+  if (cached && cached.html) {
+    if (Buffer.isBuffer(cached.html)) {
+      try {
+        cached.html = zlib.gunzipSync(cached.html).toString('utf-8');
+      } catch (err) {
+        console.error(`Error decompressing cached page for ${url}:`, err.message);
+        cached.html = cached.html.toString('utf-8');
+      }
+    }
+  }
+  return cached;
 }
 
 /**
@@ -264,6 +284,7 @@ export function getCachedPage(url) {
  */
 export function saveCachedPage(url, html, etag, lastModified) {
   if (!db) return;
+  const compressedHtml = zlib.gzipSync(Buffer.from(html, 'utf-8'));
   const stmt = db.prepare(`
     INSERT INTO http_cache (url, html, etag, last_modified, cached_at)
     VALUES (?, ?, ?, ?, ?)
@@ -273,5 +294,47 @@ export function saveCachedPage(url, html, etag, lastModified) {
       last_modified = excluded.last_modified,
       cached_at = excluded.cached_at
   `);
-  stmt.run(url, html, etag || null, lastModified || null, new Date().toISOString());
+  stmt.run(url, compressedHtml, etag || null, lastModified || null, new Date().toISOString());
+}
+
+/**
+ * Retrieves cached LLM extraction result by content hash.
+ * @param {string} hash 
+ * @returns {object|null}
+ */
+export function getLlmCache(hash) {
+  if (!db) return null;
+  const stmt = db.prepare(`
+    SELECT * FROM llm_cache WHERE content_hash = ?
+  `);
+  const record = stmt.get(hash);
+  if (record && record.result) {
+    try {
+      return JSON.parse(record.result);
+    } catch (e) {
+      return null;
+    }
+  }
+  return null;
+}
+
+/**
+ * Saves LLM extraction result to cache.
+ * @param {string} hash 
+ * @param {string} schemaName 
+ * @param {string} instruction 
+ * @param {object} result 
+ */
+export function saveLlmCache(hash, schemaName, instruction, result) {
+  if (!db) return;
+  const stmt = db.prepare(`
+    INSERT INTO llm_cache (content_hash, schema_used, instruction, result, cached_at)
+    VALUES (?, ?, ?, ?, ?)
+    ON CONFLICT(content_hash) DO UPDATE SET
+      schema_used = excluded.schema_used,
+      instruction = excluded.instruction,
+      result = excluded.result,
+      cached_at = excluded.cached_at
+  `);
+  stmt.run(hash, schemaName, instruction || '', JSON.stringify(result), new Date().toISOString());
 }
