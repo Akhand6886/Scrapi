@@ -13,8 +13,10 @@ import {
   getAllScrapes, 
   getScrapeById, 
   saveMarkdownFile,
-  getProfileByName
+  getProfileByName,
+  saveJsonFile
 } from './storage.js';
+import { extractData, summarizeContent } from './llm.js';
 
 const program = new Command();
 
@@ -76,13 +78,52 @@ async function performScrape(url, options) {
       console.log(result.markdown);
       console.log('--------------------\n');
     } else {
-      const filename = await saveMarkdownFile(result.markdown, result.metadata, {
+      let finalMarkdown = result.markdown;
+      let filename = options.filename;
+      
+      // Perform LLM Summarization if requested
+      if (options.llm && options.summarize) {
+        spinner.text = 'Generating LLM summary...';
+        try {
+          const summary = await summarizeContent(result.markdown);
+          finalMarkdown = `## Summary\n${summary}\n\n---\n\n${finalMarkdown}`;
+        } catch (llmErr) {
+          console.warn(chalk.yellow(`\n⚠️ Summarization failed: ${llmErr.message}. Skipping summary.`));
+        }
+      }
+
+      filename = await saveMarkdownFile(finalMarkdown, result.metadata, {
         output: options.output,
-        filename: options.filename,
+        filename: filename,
         noMeta: options.noMeta
       });
       dbRecord.filename = filename;
       spinner.succeed(chalk.green(`Scraped successfully! Saved to ${chalk.cyan(filename)}`));
+
+      // Perform LLM Structured Data Extraction if requested
+      if (options.llm && (options.extract || options.schema)) {
+        spinner.text = 'Extracting structured JSON...';
+        try {
+          const schemaName = options.schema || 'custom';
+          const instruction = options.extract || 'Extract key data points.';
+          
+          const jsonData = await extractData(result.markdown, url, schemaName, { instruction });
+          
+          // Save JSON output if requested
+          if (options.outputJson) {
+            const jsonFilename = await saveJsonFile(jsonData, filename, { output: options.output });
+            console.log(chalk.green(`✓ Saved structured data to ${chalk.cyan(jsonFilename)}`));
+          } else {
+            console.log(chalk.bold.cyan('\nExtracted JSON:'));
+            console.log(JSON.stringify(jsonData, null, 2));
+          }
+
+          dbRecord.llm_processed = true;
+          dbRecord.schema_used = schemaName;
+        } catch (llmErr) {
+          console.warn(chalk.yellow(`\n⚠️ Structured extraction failed: ${llmErr.message}`));
+        }
+      }
     }
 
     // Insert into DB unless disabled
@@ -116,8 +157,14 @@ program
   .option('--no-db', 'Skip SQLite database insert', false)
   .option('--timeout <ms>', 'Request timeout in milliseconds', '10000')
   .option('--profile <name>', 'Use saved visual scraper profile name')
+  // LLM options
+  .option('--llm', 'Enable LLM processing after scrape', false)
+  .option('--extract <instruction>', 'Plain-English extraction instruction')
+  .option('--summarize', 'Auto-summarize the scraped content', false)
+  .option('--schema <name>', 'Use Zod schema (article, product, event, contact)', 'custom')
+  .option('--output-json', 'Save structured JSON alongside Markdown', false)
   .action(async (url, options) => {
-    await initStorage(options.dbDir, options.output);
+    await initStorage(undefined, options.output);
     await performScrape(url, options);
   });
 
@@ -132,8 +179,14 @@ program
   .option('--no-db', 'Skip SQLite database insert', false)
   .option('--timeout <ms>', 'Request timeout in milliseconds', '10000')
   .option('--profile <name>', 'Use saved visual scraper profile name')
+  // LLM options
+  .option('--llm', 'Enable LLM processing after scrape', false)
+  .option('--extract <instruction>', 'Plain-English extraction instruction')
+  .option('--summarize', 'Auto-summarize the scraped content', false)
+  .option('--schema <name>', 'Use Zod schema (article, product, event, contact)', 'custom')
+  .option('--output-json', 'Save structured JSON alongside Markdown', false)
   .action(async (file, options) => {
-    await initStorage(options.dbDir, options.output);
+    await initStorage(undefined, options.output);
     const spinner = ora(`Reading URLs from ${file}...`).start();
     
     try {
