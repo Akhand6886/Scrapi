@@ -91,20 +91,20 @@ app.get('/api/proxy', async (req, res) => {
     
     // Injects <base href="..."> into <head> so relative assets load fine
     const baseTag = `<base href="${targetUrl}">`;
-    if (html.includes('<head>')) {
-      html = html.replace('<head>', `<head>${baseTag}`);
-    } else if (html.includes('<HEAD>')) {
-      html = html.replace('<HEAD>', `<HEAD>${baseTag}`);
+    const headRegex = /(<head[^>]*>)/i;
+    if (headRegex.test(html)) {
+      html = html.replace(headRegex, `$1${baseTag}`);
     } else {
       html = baseTag + html;
     }
 
-    // Inject our picker.js client script before </body>
-    const scriptTag = `<script src="/api/picker.js"></script>`;
-    if (html.includes('</body>')) {
-      html = html.replace('</body>', `${scriptTag}</body>`);
-    } else if (html.includes('</BODY>')) {
-      html = html.replace('</BODY>', `${scriptTag}</BODY>`);
+    // Inject our picker.js client script absolute to our host before </body>
+    const host = req.headers.host || 'localhost:3001';
+    const protocol = req.secure || req.headers['x-forwarded-proto'] === 'https' ? 'https' : 'http';
+    const scriptTag = `<script src="${protocol}://${host}/api/picker.js"></script>`;
+    const bodyCloseRegex = /(<\/body>)/i;
+    if (bodyCloseRegex.test(html)) {
+      html = html.replace(bodyCloseRegex, `${scriptTag}$1`);
     } else {
       html = html + scriptTag;
     }
