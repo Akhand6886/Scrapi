@@ -3,6 +3,7 @@ import express from 'express';
 import cors from 'cors';
 import { chromium } from 'playwright';
 import axios from 'axios';
+import * as cheerio from 'cheerio';
 import path from 'path';
 import fs from 'fs/promises';
 import { fileURLToPath } from 'url';
@@ -98,6 +99,78 @@ app.post('/api/preview', async (req, res) => {
     const result = await scrapePage(url, { selector });
     res.json({ markdown: result.markdown });
   } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// POST discover links matching selector
+app.post('/api/discover', async (req, res) => {
+  const { url, selector, mode } = req.body;
+  if (!url || !selector) {
+    return res.status(400).json({ error: 'Missing url or selector' });
+  }
+
+  const renderMode = mode || 'static';
+  let html = '';
+
+  try {
+    if (renderMode === 'static') {
+      console.log(`🌐 [Discover API] Static fetch: ${url}`);
+      const response = await axios.get(url, {
+        timeout: 10000,
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+          'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9',
+        },
+        responseType: 'text'
+      });
+      html = response.data;
+    } else {
+      console.log(`🌐 [Discover API] Dynamic browser fetch: ${url}`);
+      const browser = await getSharedBrowser();
+      const context = await browser.newContext({
+        userAgent: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+      });
+      const page = await context.newPage();
+      try {
+        await page.goto(url, { waitUntil: 'load', timeout: 30000 });
+        html = await page.content();
+      } finally {
+        await context.close();
+        resetIdleTimer();
+      }
+    }
+
+    const $ = cheerio.load(html);
+    const discoveredUrls = new Set();
+
+    $(selector).each((_, elem) => {
+      let href = $(elem).attr('href');
+      if (!href) {
+        const parentAnchor = $(elem).closest('a');
+        if (parentAnchor.length > 0) {
+          href = parentAnchor.attr('href');
+        }
+      }
+
+      if (href) {
+        try {
+          if (href.startsWith('#') || href.startsWith('mailto:') || href.startsWith('tel:') || href.startsWith('javascript:')) {
+            return;
+          }
+          const absoluteUrl = new URL(href, url).href;
+          discoveredUrls.add(absoluteUrl);
+        } catch (e) {
+          // ignore parsing error
+        }
+      }
+    });
+
+    const resultList = Array.from(discoveredUrls);
+    console.log(`✓ [Discover API] Found ${resultList.length} links matching selector "${selector}"`);
+    res.json({ urls: resultList });
+  } catch (err) {
+    console.error(`❌ [Discover API] Discovery failed: ${err.message}`);
     res.status(500).json({ error: err.message });
   }
 });
