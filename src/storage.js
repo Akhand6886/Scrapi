@@ -43,6 +43,14 @@ export async function initStorage(dbDir = './data', outputDir = './output') {
       selectors TEXT NOT NULL, -- JSON string
       created_at DATETIME NOT NULL
     );
+
+    CREATE TABLE IF NOT EXISTS http_cache (
+      url TEXT PRIMARY KEY,
+      html TEXT NOT NULL,
+      etag TEXT,
+      last_modified TEXT,
+      cached_at DATETIME NOT NULL
+    );
   `);
 }
 
@@ -232,4 +240,38 @@ export function getAllProfiles() {
     p.selectors = JSON.parse(p.selectors);
     return p;
   });
+}
+
+/**
+ * Retrieves a cached HTTP response.
+ * @param {string} url 
+ * @returns {object|null}
+ */
+export function getCachedPage(url) {
+  if (!db) return null;
+  const stmt = db.prepare(`
+    SELECT * FROM http_cache WHERE url = ?
+  `);
+  return stmt.get(url);
+}
+
+/**
+ * Saves or updates a cached HTTP response.
+ * @param {string} url 
+ * @param {string} html 
+ * @param {string} etag 
+ * @param {string} lastModified 
+ */
+export function saveCachedPage(url, html, etag, lastModified) {
+  if (!db) return;
+  const stmt = db.prepare(`
+    INSERT INTO http_cache (url, html, etag, last_modified, cached_at)
+    VALUES (?, ?, ?, ?, ?)
+    ON CONFLICT(url) DO UPDATE SET
+      html = excluded.html,
+      etag = excluded.etag,
+      last_modified = excluded.last_modified,
+      cached_at = excluded.cached_at
+  `);
+  stmt.run(url, html, etag || null, lastModified || null, new Date().toISOString());
 }
