@@ -1,9 +1,10 @@
 import axios from 'axios';
 import * as cheerio from 'cheerio';
 import TurndownService from 'turndown';
+import { getCachedPage, saveCachedPage } from './storage.js';
 
 /**
- * Fetches HTML from a given URL with options.
+ * Fetches HTML from a given URL with options. Supports HTTP Conditional Caching (ETag/Last-Modified).
  * @param {string} url 
  * @param {object} options 
  * @returns {Promise<string>}
@@ -12,24 +13,72 @@ export async function fetchHtml(url, options = {}) {
   const timeout = options.timeout || 10000;
   const userAgent = options.userAgent || 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
 
-  const response = await axios.get(url, {
-    timeout,
-    maxContentLength: 5 * 1024 * 1024, // Protect system: max download limit 5MB
-    responseType: 'text',
-    headers: {
-      'User-Agent': userAgent,
-      'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9',
-      'Accept-Language': 'en-US,en;q=0.5',
+  let cached = null;
+  if (!options.noCache) {
+    try {
+      cached = getCachedPage(url);
+    } catch (e) {
+      // Storage might not be initialized yet in test scripts
     }
-  });
-
-  // Verify that the response content type looks like HTML
-  const contentType = response.headers['content-type'] || '';
-  if (contentType && !contentType.includes('text/html') && !contentType.includes('application/xhtml+xml')) {
-    throw new Error(`Invalid content type: "${contentType}". Only HTML documents can be scraped.`);
   }
 
-  return response.data;
+  const headers = {
+    'User-Agent': userAgent,
+    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9',
+    'Accept-Language': 'en-US,en;q=0.5',
+  };
+
+  // Add conditional headers if cache exists
+  if (cached) {
+    if (cached.etag) {
+      headers['If-None-Match'] = cached.etag;
+    }
+    if (cached.last_modified) {
+      headers['If-Modified-Since'] = cached.last_modified;
+    }
+  }
+
+  try {
+    const response = await axios.get(url, {
+      timeout,
+      maxContentLength: 5 * 1024 * 1024, // Protect system: max download limit 5MB
+      responseType: 'text',
+      headers,
+      validateStatus: (status) => (status >= 200 && status < 300) || status === 304
+    });
+
+    // If 304 Not Modified, return the cached body immediately (saves network & CPU)
+    if (response.status === 304 && cached) {
+      console.log(`⚡ [Cache] Page content unchanged (status 304). Serving from cache.`);
+      return cached.html;
+    }
+
+    // Verify that the response content type looks like HTML
+    const contentType = response.headers['content-type'] || '';
+    if (contentType && !contentType.includes('text/html') && !contentType.includes('application/xhtml+xml')) {
+      throw new Error(`Invalid content type: "${contentType}". Only HTML documents can be scraped.`);
+    }
+
+    const html = response.data;
+
+    // Cache the successful response
+    if (!options.noCache) {
+      try {
+        saveCachedPage(url, html, response.headers['etag'], response.headers['last-modified']);
+      } catch (e) {
+        // Ignore cache saving failures
+      }
+    }
+
+    return html;
+  } catch (err) {
+    // If request fails but we have a cached copy, fallback to cached copy
+    if (cached) {
+      console.warn(`⚠️ [Cache Fallback] Request failed: ${err.message}. Serving stale cached content.`);
+      return cached.html;
+    }
+    throw err;
+  }
 }
 
 /**
