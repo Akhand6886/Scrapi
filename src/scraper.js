@@ -65,6 +65,101 @@ function getTextToTagRatio(element, $) {
 }
 
 /**
+ * Generates a simple, robust CSS selector for a resolved candidate element.
+ * @param {object} $ 
+ * @param {object} elem 
+ * @returns {string}
+ */
+function generateHealedSelector($, elem) {
+  let path = [];
+  let current = elem;
+  while (current && current.type === 'tag') {
+    let tag = current.name;
+    const id = $(current).attr('id');
+    if (id) {
+      path.unshift(`#${id}`);
+      break;
+    }
+    const classAttr = $(current).attr('class');
+    if (classAttr) {
+      const classes = classAttr.trim().split(/\s+/).filter(c => c && !c.startsWith('scrapi-'));
+      if (classes.length > 0) {
+        tag += '.' + classes[0]; // use first class for minimal selector
+      }
+    }
+    path.unshift(tag);
+    current = current.parent;
+  }
+  return path.join(' > ');
+}
+
+/**
+ * Resolves a failed selector using multi-anchor structural signatures.
+ * @param {object} $ 
+ * @param {object} signature 
+ * @returns {object|null} Cheerio element selection or null
+ */
+function attemptSelfHealing($, signature) {
+  const tagName = signature.tagName || '*';
+  const candidates = $(tagName);
+  if (candidates.length === 0) return null;
+
+  let bestCandidate = null;
+  let maxScore = -1;
+
+  candidates.each((_, elem) => {
+    let score = 0;
+
+    // Anchor 1: Text Content similarity (partial matches)
+    const text = $(elem).text().trim();
+    if (signature.textSnippet && text) {
+      if (text.includes(signature.textSnippet) || signature.textSnippet.includes(text)) {
+        score += 0.5;
+      } else {
+        // Compute word intersection
+        const signatureWords = new Set(signature.textSnippet.toLowerCase().split(/\s+/).filter(Boolean));
+        const candidateWords = new Set(text.toLowerCase().split(/\s+/).filter(Boolean));
+        const intersection = [...signatureWords].filter(w => candidateWords.has(w));
+        if (signatureWords.size > 0) {
+          score += (intersection.length / signatureWords.size) * 0.4;
+        }
+      }
+    }
+
+    // Anchor 2: Class overlap
+    if (signature.classes && signature.classes.length > 0) {
+      const classAttr = $(elem).attr('class') || '';
+      const candidateClasses = classAttr.split(/\s+/).filter(Boolean);
+      const matchedClasses = signature.classes.filter(c => candidateClasses.includes(c));
+      score += (matchedClasses.length / signature.classes.length) * 0.3;
+    }
+
+    // Anchor 3: Parent hierarchy alignment
+    if (signature.parentTagName) {
+      const parent = $(elem).parent();
+      if (parent.length > 0 && parent[0].name.toLowerCase() === signature.parentTagName.toLowerCase()) {
+        score += 0.2;
+      }
+    }
+
+    if (score > maxScore) {
+      maxScore = score;
+      bestCandidate = elem;
+    }
+  });
+
+  // Threshold check to prevent matching random garbage elements
+  if (bestCandidate && maxScore >= 0.35) {
+    const healedSelector = generateHealedSelector($, bestCandidate);
+    console.warn(`✨ [Self-Healing] Successfully recovered target element (Similarity: ${Math.round(maxScore * 100)}%).`);
+    console.warn(`   New dynamic anchor selector: "${healedSelector}"`);
+    return $(bestCandidate);
+  }
+
+  return null;
+}
+
+/**
  * Detects the best content root element.
  * Priority:
  * 1. article
@@ -73,14 +168,33 @@ function getTextToTagRatio(element, $) {
  * 4. div with highest text-to-tag ratio (heuristic fallback)
  * 5. body (last resort)
  * @param {object} $ 
- * @param {string} selector 
+ * @param {string|object} selector 
  * @returns {object} Cheerio element selection
  */
 export function findBestContentRoot($, selector = 'auto') {
-  if (selector && selector !== 'auto') {
-    const customSelection = $(selector);
+  let signature = null;
+  let targetSelector = 'auto';
+
+  if (typeof selector === 'object' && selector !== null) {
+    signature = selector;
+    targetSelector = signature.content || 'auto';
+  } else {
+    targetSelector = selector;
+  }
+
+  if (targetSelector && targetSelector !== 'auto') {
+    const customSelection = $(targetSelector);
     if (customSelection.length > 0) {
       return customSelection.first();
+    }
+
+    // Target selector failed. Trigger self-healing if we have signature metadata.
+    if (signature && (signature.tagName || signature.textSnippet)) {
+      console.warn(`⚠️ Primary selector "${targetSelector}" failed to match elements. Initiating self-healing...`);
+      const healedElement = attemptSelfHealing($, signature);
+      if (healedElement) {
+        return healedElement;
+      }
     }
   }
 
