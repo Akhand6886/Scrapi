@@ -16,7 +16,7 @@ import {
   getProfileByName,
   saveJsonFile
 } from './storage.js';
-import { extractData, summarizeContent } from './llm.js';
+import { extractData, summarizeContent, groupScrapes } from './llm.js';
 
 const program = new Command();
 
@@ -131,6 +131,7 @@ async function performScrape(url, options) {
     if (!options.noDb) {
       insertScrape(dbRecord);
     }
+    return { url, title: dbRecord.title || url, markdown: result.markdown };
   } catch (err) {
     dbRecord.error = err.message;
     if (!options.noDb) {
@@ -142,6 +143,7 @@ async function performScrape(url, options) {
     }
     spinner.fail(chalk.red(`Failed to scrape ${url}`));
     console.error(chalk.red(`Reason: ${err.message}`));
+    return null;
   }
 }
 
@@ -188,6 +190,7 @@ program
   .option('--schema <name>', 'Use Zod schema (article, product, event, contact)', 'custom')
   .option('--output-json', 'Save structured JSON alongside Markdown', false)
   .option('--no-cache', 'Bypass HTTP cache and force fresh request', false)
+  .option('--group', 'Group and categorize batch scraped pages dynamically', false)
   .action(async (file, options) => {
     await initStorage(undefined, options.output);
     const spinner = ora(`Reading URLs from ${file}...`).start();
@@ -198,12 +201,52 @@ program
       
       spinner.succeed(`Found ${urls.length} URLs in batch file.`);
       
+      const successfullyScraped = [];
       for (let i = 0; i < urls.length; i++) {
         console.log(chalk.gray(`\n[${i + 1}/${urls.length}]`));
-        await performScrape(urls[i], options);
+        const res = await performScrape(urls[i], options);
+        if (res) {
+          successfullyScraped.push(res);
+        }
         // Short delay between requests to be polite
         if (i < urls.length - 1) {
           await new Promise(resolve => setTimeout(resolve, 1500));
+        }
+      }
+
+      // Grouping logic if requested
+      if (options.llm && options.group && successfullyScraped.length > 0) {
+        const groupSpinner = ora('Categorizing and grouping batch scrapes...').start();
+        try {
+          const groupings = await groupScrapes(successfullyScraped);
+          
+          const stamp = Math.floor(Date.now() / 1000).toString().slice(-4);
+          const baseName = `batch-grouping-${stamp}`;
+          
+          // Save dynamic JSON groupings map
+          const jsonPath = path.join(options.output, `${baseName}.json`);
+          await fs.writeFile(jsonPath, JSON.stringify(groupings, null, 2), 'utf-8');
+          
+          // Write index markdown summary
+          let indexMd = `# Batch Scrape Grouping Index\n\n`;
+          indexMd += `> Created at: ${new Date().toISOString()}\n\n`;
+          
+          for (const [category, itemUrls] of Object.entries(groupings)) {
+            indexMd += `## ${category}\n`;
+            itemUrls.forEach(u => {
+              const item = successfullyScraped.find(s => s.url === u);
+              const title = item ? item.title : u;
+              indexMd += `- [${title}](${u})\n`;
+            });
+            indexMd += `\n`;
+          }
+          
+          const mdPath = path.join(options.output, `${baseName}.md`);
+          await fs.writeFile(mdPath, indexMd, 'utf-8');
+          
+          groupSpinner.succeed(chalk.green(`Grouped scrapes into ${chalk.cyan(baseName + '.md')} and ${chalk.cyan(baseName + '.json')}`));
+        } catch (groupErr) {
+          groupSpinner.fail(chalk.red(`Failed to group batch scrapes: ${groupErr.message}`));
         }
       }
     } catch (err) {
