@@ -18,14 +18,18 @@ A terminal-first, developer-grade web scraping tool built in Node.js. It extract
   - `show <id>`: Print Markdown content of a past scrape from DB.
   - `export <id>`: Re-export scraped Markdown to a custom output path.
 
-### Phase 2: Interactive UI (Planned)
-- Local React visual interface with element hover highlighting and click-to-select CSS selector auto-generation.
-- Reuse saved profiles directly from the CLI via `scrape --profile <name> <url>`.
+### Phase 2: Interactive UI (Complete)
+- **Local React Visual Console**: Beautiful dark-mode interface with element hover highlighting and click-to-select CSS selector generation.
+- **Dual-Mode Hybrid Proxy**: Static render mode via Axios for instant preview frames (<100ms), falling back to Playwright only for dynamic/JS rendering.
+- **Lag-Free Visual Selection**: 50ms debounced pointer events and caching on target DOM trees to avoid visual picker reflow lag.
+- **Visual Scraping Profiles**: Save config as a named profile to SQLite, and execute it from terminal: `scrape --profile <name> <url>`.
 
-### Phase 3: LLM Intelligence (Planned)
-- Structured schema-validated JSON extraction using Anthropic Claude & Zod.
-- Predefined schemas: `article`, `product`, `event`, and `contact`.
-- Auto-summarize and multi-scrape grouping.
+### Phase 3: LLM Intelligence (Complete)
+- **Structured JSON Extraction**: Convert Markdown to schema-validated JSON using Anthropic Claude or Local LLM.
+- **Predefined Zod Schemas**: Support for `article`, `product`, `event`, and `contact` models.
+- **Smart Result Caching**: Caches LLM parsing runs based on input SHA-256 hash to prevent redundant paid API calls.
+- **Offline Fallbacks**: Automatically falls back to rule-based heuristic extraction patterns if API keys or endpoints are unavailable.
+- **Auto-Summarization & Batch Grouping**: Multi-page grouping index maps URLs dynamically.
 
 ---
 
@@ -68,6 +72,11 @@ node src/cli.js scrape https://example.com --images
 Create a `urls.txt` file (one URL per line) and run:
 ```bash
 node src/cli.js batch urls.txt
+```
+
+### Run Batch Scrapes with Custom Concurrency (Parallel Workers)
+```bash
+node src/cli.js batch urls.txt --concurrency 4
 ```
 
 ### View Scrape History
