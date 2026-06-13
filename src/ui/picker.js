@@ -30,9 +30,12 @@
     while (el && el.nodeType === Node.ELEMENT_NODE) {
       let selector = el.nodeName.toLowerCase();
       
-      // If it has a unique class, add it
-      if (el.className && typeof el.className === 'string') {
-        const classes = el.className.trim().split(/\s+/).filter(c => c && !c.startsWith('scrapi-'));
+      // If it has classes, parse them safely (works for SVG and ignores Tailwind colon-classes)
+      const classAttr = el.getAttribute('class');
+      if (classAttr && typeof classAttr === 'string') {
+        const classes = classAttr.trim()
+          .split(/\s+/)
+          .filter(c => c && !c.startsWith('scrapi-') && !c.includes(':') && !c.includes('['));
         if (classes.length > 0) {
           selector += '.' + classes.join('.');
         }
@@ -50,8 +53,13 @@
       
       let parent = el.parentElement;
       if (parent) {
-        let siblingsWithSameSelector = parent.querySelectorAll(selector);
-        if (siblingsWithSameSelector.length > 1) {
+        try {
+          let siblingsWithSameSelector = parent.querySelectorAll(selector);
+          if (siblingsWithSameSelector.length > 1) {
+            selector += `:nth-of-type(${nth})`;
+          }
+        } catch (e) {
+          // Fallback if querySelectorAll fails due to any weird characters
           selector += `:nth-of-type(${nth})`;
         }
       }
