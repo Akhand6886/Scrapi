@@ -77,6 +77,7 @@
       // Inputs
       const [url, setUrl] = useState('');
       const [selector, setSelector] = useState('');
+      const [activeSignature, setActiveSignature] = useState(null);
       const [profileName, setProfileName] = useState('');
       const [includeImages, setIncludeImages] = useState(false);
       const [noMeta, setNoMeta] = useState(false);
@@ -120,8 +121,15 @@
         // Listen for selector clicked in iframe proxy
         const handleIframeMessage = (event) => {
           if (event.data && event.data.type === 'ELEMENT_SELECTED') {
-            const { selector: sel, tagName, textSnippet } = event.data;
+            const { selector: sel, tagName, textSnippet, classes, parentTagName } = event.data;
             setSelector(sel);
+            setActiveSignature({
+              content: sel,
+              tagName,
+              textSnippet,
+              classes,
+              parentTagName
+            });
             showToast(`Selected ${tagName.toUpperCase()}: "${textSnippet.substring(0, 30)}..."`, 'success');
           }
         };
@@ -192,6 +200,15 @@
           return;
         }
 
+        // Build self-healing selector signature
+        const finalSignature = activeSignature && activeSignature.content === selector ? activeSignature : {
+          content: selector,
+          tagName: '*',
+          textSnippet: '',
+          classes: [],
+          parentTagName: null
+        };
+
         try {
           const res = await fetch('/api/profiles', {
             method: 'POST',
@@ -199,13 +216,14 @@
             body: JSON.stringify({
               name: profileName,
               urlPattern: url,
-              selectors: { content: selector }
+              selectors: finalSignature
             })
           });
 
           if (res.ok) {
             showToast(`Profile "${profileName}" saved successfully!`, 'success');
             setProfileName('');
+            setActiveSignature(null);
             loadData(); // reload profiles list
           } else {
             const data = await res.json();
@@ -219,8 +237,14 @@
       // Apply saved profile settings
       const handleApplyProfile = (prof) => {
         setUrl(prof.url_pattern);
-        if (prof.selectors && prof.selectors.content) {
-          setSelector(prof.selectors.content);
+        if (prof.selectors) {
+          if (typeof prof.selectors === 'object') {
+            setSelector(prof.selectors.content || 'auto');
+            setActiveSignature(prof.selectors);
+          } else {
+            setSelector(prof.selectors);
+            setActiveSignature({ content: prof.selectors });
+          }
         }
         showToast(`Profile "${prof.name}" settings applied!`, 'success');
       };
