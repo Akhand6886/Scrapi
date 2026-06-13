@@ -20,8 +20,28 @@ initStorage();
 
 // Shared long-lived headless browser instance to reduce CPU and memory usage
 let sharedBrowser = null;
+let idleTimer = null;
+const BROWSER_IDLE_TIMEOUT = 5 * 60 * 1000; // 5 minutes idle time
+
+function resetIdleTimer() {
+  if (idleTimer) {
+    clearTimeout(idleTimer);
+  }
+  idleTimer = setTimeout(async () => {
+    if (sharedBrowser) {
+      console.log('💤 Shared headless browser idle for 5 minutes. Shutting down browser process to free RAM...');
+      try {
+        await sharedBrowser.close();
+      } catch (e) {}
+      sharedBrowser = null;
+    }
+  }, BROWSER_IDLE_TIMEOUT);
+}
 
 async function getSharedBrowser() {
+  if (idleTimer) {
+    clearTimeout(idleTimer);
+  }
   if (!sharedBrowser) {
     sharedBrowser = await chromium.launch({ headless: true });
     sharedBrowser.on('disconnected', () => {
@@ -95,6 +115,29 @@ app.get('/api/proxy', async (req, res) => {
       userAgent: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
     });
     const page = await context.newPage();
+
+    // Enable request routing to block tracker scripts, media, and fonts to save memory & CPU cycles
+    await page.route('**/*', (route) => {
+      const request = route.request();
+      const resourceType = request.resourceType();
+      const url = request.url();
+
+      const blockedTypes = ['media', 'font'];
+      const blockedDomains = [
+        'google-analytics.com', 'googletagmanager.com', 'facebook.net',
+        'doubleclick.net', 'adnxs.com', 'ads-twitter.com', 'scorecardresearch.com',
+        'amazon-adsystem.com', 'quantserve.com', 'crazyegg.com', 'hotjar.com'
+      ];
+
+      const shouldBlock = blockedTypes.includes(resourceType) || 
+                          blockedDomains.some(domain => url.includes(domain));
+
+      if (shouldBlock) {
+        route.abort();
+      } else {
+        route.continue();
+      }
+    });
     
     // Navigate to page
     await page.goto(targetUrl, { waitUntil: 'load', timeout: 30000 });
@@ -133,6 +176,7 @@ app.get('/api/proxy', async (req, res) => {
     if (context) {
       await context.close();
     }
+    resetIdleTimer();
   }
 });
 

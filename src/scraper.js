@@ -14,12 +14,20 @@ export async function fetchHtml(url, options = {}) {
 
   const response = await axios.get(url, {
     timeout,
+    maxContentLength: 5 * 1024 * 1024, // Protect system: max download limit 5MB
+    responseType: 'text',
     headers: {
       'User-Agent': userAgent,
-      'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+      'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9',
       'Accept-Language': 'en-US,en;q=0.5',
     }
   });
+
+  // Verify that the response content type looks like HTML
+  const contentType = response.headers['content-type'] || '';
+  if (contentType && !contentType.includes('text/html') && !contentType.includes('application/xhtml+xml')) {
+    throw new Error(`Invalid content type: "${contentType}". Only HTML documents can be scraped.`);
+  }
 
   return response.data;
 }
