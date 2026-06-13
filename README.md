@@ -111,35 +111,35 @@ Scrapes are logged using the following schema:
 
 
 
-WebScraper 1-Week Sprint Tasks
- Day 1: Setup & Scraper Core
- Initialize workspace, create package.json with ESM, install dependencies
- Create scraper.js core fetching logic with Axios
- Create HTML DOM cleaning logic using Cheerio
- Implement smart content root detection fallbacks
- Convert HTML to clean Markdown with Turndown
- Day 2: DB Layer & CLI Commands
- Initialize SQLite database schema (scrapes and profiles tables) in storage.js
- Implement query/insert database helper methods
- Implement CLI entry point in cli.js with Commander.js
- Add subcommands: scrape, batch, list, show, export
- Day 3: Express & Playwright Server
- Install Playwright and set up browser launcher
- Implement local Express backend bridge in ui/server.js
- Implement endpoint to serve target page contents and screenshots
- Day 4: React UI & Selector Gen
- Bootstrap React Vite application under ui/
- Build element highlighting picker dashboard (App.jsx and Picker.jsx)
- Integrate visual click-to-selector generation
- Connect profile saving from UI to SQLite and support in CLI scrape --profile <name>
- Day 5: LLM API & Zod Validation
- Integrate Anthropic SDK in llm.js
- Define Zod validation schemas (article, product, event)
- Connect CLI flags for LLM processing (--llm, --extract, --summarize, --schema)
- Day 6: Grouping, Categorization & Testing
- Implement batch categorization and grouping logic (--group)
- Run manual integration tests on 10+ real-world URLs
- Day 7: Documentation & Polish
- Write user guide in README.md
- Final visual design adjustments and error boundary checks
- Create walkthrough documentation
+## 📅 1-Week Sprint Tasks Progress
+
+- [x] **Day 1: Setup & Scraper Core**
+  - [x] Initialize workspace, create `package.json` with ESM, install dependencies
+  - [x] Create `scraper.js` core fetching logic with Axios
+  - [x] Create HTML DOM cleaning logic using Cheerio
+  - [x] Implement smart content root detection fallbacks
+  - [x] Convert HTML to clean Markdown with Turndown
+- [x] **Day 2: DB Layer & CLI Commands**
+  - [x] Initialize SQLite database schema (`scrapes` and `profiles` tables) in `storage.js`
+  - [x] Implement query/insert database helper methods
+  - [x] Implement CLI entry point in `cli.js` with Commander.js
+  - [x] Add subcommands: `scrape`, `batch`, `list`, `show`, `export`
+- [x] **Day 3: Express & Playwright Server**
+  - [x] Install Playwright and set up browser launcher
+  - [x] Implement local Express backend bridge in `ui/server.js`
+  - [x] Implement endpoint to serve target page contents
+- [x] **Day 4: React UI & Selector Gen**
+  - [x] Build element highlighting picker dashboard (`index.html` and `picker.js`)
+  - [x] Integrate visual click-to-selector generation
+  - [x] Connect profile saving from UI to SQLite and support in CLI `scrape --profile <name>`
+- [x] **Day 5: LLM API & Zod Validation**
+  - [x] Integrate Anthropic SDK / Local LLM / Rule-based fallback in `llm.js`
+  - [x] Define Zod validation schemas (`article`, `product`, `event`, `contact`)
+  - [x] Connect CLI flags for LLM processing (`--llm`, `--extract`, `--summarize`, `--schema`)
+- [x] **Day 6: Grouping, Categorization & Testing**
+  - [x] Implement batch categorization and grouping logic (`--group`)
+  - [x] Run manual integration tests on 10+ real-world URLs
+- [x] **Day 7: Documentation & Polish**
+  - [x] Write user guide in `README.md`
+  - [x] Final visual design adjustments and error boundary checks
+  - [x] Create walkthrough and architecture documentation
