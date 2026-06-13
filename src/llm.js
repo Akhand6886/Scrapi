@@ -3,6 +3,8 @@ import axios from 'axios';
 import * as cheerio from 'cheerio';
 import { z } from 'zod';
 import Anthropic from '@anthropic-ai/sdk';
+import crypto from 'crypto';
+import { getLlmCache, saveLlmCache } from './storage.js';
 
 dotenv.config();
 
@@ -200,6 +202,22 @@ ${markdown.substring(0, 15000)}
 Extract the values matching this JSON schema: ${schemaStr}. Ensure all keys are populated or set to null if not found. Return only the raw JSON.
 `;
 
+  // Calculate sha256 hash of the inputs to check LLM cache
+  const inputHash = crypto.createHash('sha256')
+    .update(`${markdown}::${schemaName}::${instruction}`)
+    .digest('hex');
+
+  // Try checking the cache first
+  try {
+    const cachedResult = getLlmCache(inputHash);
+    if (cachedResult) {
+      console.log(`⚡ [LLM Cache] Cache hit for schema "${schemaName}". Bypassing LLM API request.`);
+      return validateSchema(cachedResult, schemaName);
+    }
+  } catch (err) {
+    console.warn(`⚠️ Failed to read LLM cache: ${err.message}`);
+  }
+
   // 1. Try Anthropic SDK if API key is present
   if (process.env.ANTHROPIC_API_KEY && process.env.ANTHROPIC_API_KEY !== 'your_key_here') {
     try {
@@ -215,7 +233,15 @@ Extract the values matching this JSON schema: ${schemaStr}. Ensure all keys are 
 
       const responseText = response.content[0].text.trim();
       const jsonData = JSON.parse(responseText);
-      return validateSchema(jsonData, schemaName);
+      const validated = validateSchema(jsonData, schemaName);
+      
+      try {
+        saveLlmCache(inputHash, schemaName, instruction, validated);
+      } catch (cacheErr) {
+        console.warn(`⚠️ Failed to save LLM cache: ${cacheErr.message}`);
+      }
+      
+      return validated;
     } catch (err) {
       console.warn(`⚠️ Anthropic API call failed: ${err.message}. Trying local fallback...`);
     }
@@ -225,14 +251,28 @@ Extract the values matching this JSON schema: ${schemaStr}. Ensure all keys are 
   if (process.env.LOCAL_LLM_ENDPOINT) {
     try {
       const jsonData = await queryLocalLlm(prompt, schemaStr);
-      return validateSchema(jsonData, schemaName);
+      const validated = validateSchema(jsonData, schemaName);
+      
+      try {
+        saveLlmCache(inputHash, schemaName, instruction, validated);
+      } catch (cacheErr) {
+        console.warn(`⚠️ Failed to save LLM cache: ${cacheErr.message}`);
+      }
+      
+      return validated;
     } catch (err) {
       console.warn(`⚠️ Local LLM API call failed: ${err.message}.`);
     }
   }
 
   // 3. Absolute Fallback: Rule-Based / Heuristic parsing
-  return extractUsingRules(markdown, url, schemaName, instruction);
+  const ruleResult = extractUsingRules(markdown, url, schemaName, instruction);
+  try {
+    saveLlmCache(inputHash, schemaName, instruction, ruleResult);
+  } catch (cacheErr) {
+    console.warn(`⚠️ Failed to save LLM cache: ${cacheErr.message}`);
+  }
+  return ruleResult;
 }
 
 /**
