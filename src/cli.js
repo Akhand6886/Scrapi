@@ -6,7 +6,8 @@ import path from 'path';
 import { Command } from 'commander';
 import chalk from 'chalk';
 import ora from 'ora';
-import { scrapePage } from './scraper.js';
+import * as cheerio from 'cheerio';
+import { scrapePage, fetchHtml } from './scraper.js';
 import { 
   initStorage, 
   insertScrape, 
@@ -352,6 +353,66 @@ program
       console.log(chalk.green(`Successfully exported Scrape ID ${id} to ${chalk.cyan(options.dest)}`));
     } catch (err) {
       handleError(err);
+    }
+  });
+
+// Discover command
+program
+  .command('discover <url>')
+  .description('Extract and list all links matching a CSS selector from a page')
+  .requiredOption('-s, --selector <css>', 'CSS selector targeting anchor links')
+  .option('-o, --output <file>', 'Save discovered URLs list to a text file (one per line)')
+  .option('--no-cache', 'Bypass HTTP cache and force fresh request', false)
+  .action(async (url, options) => {
+    const spinner = ora(`Fetching page: ${chalk.cyan(url)}...`).start();
+    try {
+      const html = await fetchHtml(url, { noCache: !!options.noCache });
+      spinner.text = 'Parsing links...';
+      
+      const $ = cheerio.load(html);
+      const discoveredUrls = new Set();
+      
+      $(options.selector).each((_, elem) => {
+        let href = $(elem).attr('href');
+        if (!href) {
+          const parentAnchor = $(elem).closest('a');
+          if (parentAnchor.length > 0) {
+            href = parentAnchor.attr('href');
+          }
+        }
+        
+        if (href) {
+          try {
+            if (href.startsWith('#') || href.startsWith('mailto:') || href.startsWith('tel:') || href.startsWith('javascript:')) {
+              return;
+            }
+            const absoluteUrl = new URL(href, url).href;
+            discoveredUrls.add(absoluteUrl);
+          } catch (e) {
+            // Skip parse errors
+          }
+        }
+      });
+      
+      const resultList = Array.from(discoveredUrls);
+      spinner.succeed(`Extracted ${chalk.green(resultList.length)} unique links using selector "${options.selector}":\n`);
+      
+      if (resultList.length === 0) {
+        console.log(chalk.yellow('No links found matching that selector.'));
+        return;
+      }
+      
+      resultList.forEach(u => console.log(chalk.gray(`- ${u}`)));
+      console.log('');
+      
+      if (options.output) {
+        await fs.mkdir(path.dirname(options.output), { recursive: true });
+        const fileContent = resultList.join('\n') + '\n';
+        await fs.writeFile(options.output, fileContent, 'utf-8');
+        console.log(chalk.green(`✓ Successfully saved links list to ${chalk.cyan(options.output)}`));
+      }
+    } catch (err) {
+      handleError(err, spinner);
     }
   });
 
