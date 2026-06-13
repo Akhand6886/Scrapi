@@ -178,6 +178,39 @@ export function convertToMarkdown(rootElement, options = {}) {
 }
 
 /**
+ * Resolves relative URLs for <a> and <img> tags in the DOM.
+ * @param {object} $ 
+ * @param {string} baseUrl 
+ */
+export function resolveUrls($, baseUrl) {
+  $('a').each((_, elem) => {
+    const href = $(elem).attr('href');
+    if (href) {
+      try {
+        // Skip links that are anchor jumps, mailto, tel, or javascript
+        if (href.startsWith('#') || href.startsWith('mailto:') || href.startsWith('tel:') || href.startsWith('javascript:')) {
+          return;
+        }
+        $(elem).attr('href', new URL(href, baseUrl).href);
+      } catch (e) {
+        // Keep original if resolution fails
+      }
+    }
+  });
+
+  $('img').each((_, elem) => {
+    const src = $(elem).attr('src');
+    if (src) {
+      try {
+        $(elem).attr('src', new URL(src, baseUrl).href);
+      } catch (e) {
+        // Keep original if resolution fails
+      }
+    }
+  });
+}
+
+/**
  * Orchestrates the full scraping process.
  * @param {string} url 
  * @param {object} options 
@@ -191,6 +224,9 @@ export async function scrapePage(url, options = {}) {
   
   // Clean elements from the page
   cleanDom($);
+
+  // Resolve relative URLs to absolute
+  resolveUrls($, url);
   
   // Find the content we care about
   const contentRoot = findBestContentRoot($, options.selector);
