@@ -2,6 +2,7 @@ import '../polyfill.js';
 import express from 'express';
 import cors from 'cors';
 import { chromium } from 'playwright';
+import axios from 'axios';
 import path from 'path';
 import fs from 'fs/promises';
 import { fileURLToPath } from 'url';
@@ -101,13 +102,78 @@ app.post('/api/preview', async (req, res) => {
   }
 });
 
-// GET proxy: Load page with Playwright and inject picker script
+// GET proxy: Load page with Playwright or Axios and inject picker script
 app.get('/api/proxy', async (req, res) => {
   const targetUrl = req.query.url;
+  const mode = req.query.mode || 'static';
+
   if (!targetUrl) {
     return res.status(400).send('Missing url parameter');
   }
 
+  // 1. Try static Axios fetch first if static mode is active
+  if (mode === 'static') {
+    try {
+      console.log(`🌐 [Hybrid Proxy] Attempting static Axios fetch for: ${targetUrl}`);
+      const response = await axios.get(targetUrl, {
+        timeout: 10000,
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+          'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9',
+        },
+        responseType: 'text'
+      });
+
+      const contentType = response.headers['content-type'] || '';
+      if (contentType && !contentType.includes('text/html') && !contentType.includes('application/xhtml+xml')) {
+        throw new Error(`Non-HTML content type: "${contentType}"`);
+      }
+
+      let html = response.data;
+      if (!html || html.trim().length === 0) {
+        throw new Error('Retrieved HTML is empty');
+      }
+
+      // Detect if this is an empty body typical of React/Vue client-side SPAs
+      const hasAppRoot = /<div\s+id=["'](app|root|__next)["']\s*>\s*<\/div>/i.test(html);
+      const isVeryShort = html.length < 5000;
+      if (hasAppRoot && isVeryShort) {
+        console.log(`⚠️ [Hybrid Proxy] Detected probable client-side SPA. Bypassing static fetch fallback to dynamic.`);
+        throw new Error('Probable SPA detected');
+      }
+
+      // Injects <base href="..."> into <head> so relative assets load fine
+      const baseTag = `<base href="${targetUrl}">`;
+      const headRegex = /(<head[^>]*>)/i;
+      if (headRegex.test(html)) {
+        html = html.replace(headRegex, `$1${baseTag}`);
+      } else {
+        html = baseTag + html;
+      }
+
+      // Inject our picker.js client script absolute to our host before </body>
+      const host = req.headers.host || 'localhost:3001';
+      const protocol = req.secure || req.headers['x-forwarded-proto'] === 'https' ? 'https' : 'http';
+      const scriptTag = `<script src="${protocol}://${host}/api/picker.js"></script>`;
+      const bodyCloseRegex = /(<\/body>)/i;
+      if (bodyCloseRegex.test(html)) {
+        html = html.replace(bodyCloseRegex, `${scriptTag}$1`);
+      } else {
+        html = html + scriptTag;
+      }
+
+      // Strip out Content-Security-Policy meta tags that might block our scripts
+      html = html.replace(/<meta\s+http-equiv=["']Content-Security-Policy["'][^>]*>/gi, '');
+
+      console.log(`⚡ [Hybrid Proxy] Successfully loaded ${targetUrl} via static fetch (Axios). Bypassed Playwright.`);
+      res.setHeader('Content-Type', 'text/html');
+      return res.send(html);
+    } catch (err) {
+      console.warn(`⚠️ [Hybrid Proxy] Static fetch failed or bypassed: ${err.message}. Falling back to dynamic Playwright browser...`);
+    }
+  }
+
+  // 2. Playwright dynamic browser rendering fallback
   let context;
   try {
     const browser = await getSharedBrowser();
