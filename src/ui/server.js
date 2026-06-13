@@ -1,17 +1,12 @@
+import '../polyfill.js';
 import express from 'express';
 import cors from 'cors';
 import { chromium } from 'playwright';
 import path from 'path';
 import fs from 'fs/promises';
 import { fileURLToPath } from 'url';
-import { initStorage, getAllProfiles, saveProfile } from '../storage.js';
+import { initStorage, getAllProfiles, saveProfile, getAllScrapes, insertScrape, saveMarkdownFile } from '../storage.js';
 import { scrapePage } from '../scraper.js';
-
-// Polyfill for Node.js < 20 where File is not global (needed by underlying tools like undici)
-import { File } from 'buffer';
-if (typeof globalThis.File === 'undefined') {
-  globalThis.File = File;
-}
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -127,6 +122,55 @@ app.get('/api/proxy', async (req, res) => {
     }
   }
 });
+
+// GET scrapes history
+app.get('/api/scrapes', (req, res) => {
+  try {
+    const scrapes = getAllScrapes();
+    res.json(scrapes);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// POST scrape on-demand
+app.post('/api/scrape', async (req, res) => {
+  const { url, selector, images, noMeta } = req.body;
+  if (!url) {
+    return res.status(400).json({ error: 'Missing url' });
+  }
+  try {
+    const result = await scrapePage(url, { selector, images });
+    const filename = await saveMarkdownFile(result.markdown, result.metadata, { noMeta });
+    
+    const record = {
+      url,
+      title: result.metadata.title,
+      description: result.metadata.description,
+      filename,
+      word_count: result.metadata.word_count,
+      scraped_at: result.metadata.scraped_at,
+      selector: selector || 'auto',
+      status: 'success'
+    };
+    insertScrape(record);
+    res.json({ success: true, filename, markdown: result.markdown });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// POST kill/shutdown server
+app.post('/api/kill', (req, res) => {
+  res.json({ success: true, message: 'Server is shutting down...' });
+  console.log('🛑 Shutting down server as requested from Web UI...');
+  setTimeout(() => {
+    process.exit(0);
+  }, 1000);
+});
+
+// Serve frontend files statically
+app.use(express.static(__dirname));
 
 const PORT = process.env.PORT || 3001;
 app.listen(PORT, () => {
