@@ -64,7 +64,8 @@ async function performScrape(url, options) {
     const result = await scrapePage(url, {
       timeout: options.timeout ? parseInt(options.timeout, 10) : 10000,
       selector: options.selector,
-      images: !!options.images
+      images: !!options.images,
+      noCache: !!options.noCache
     });
 
     dbRecord.title = result.metadata.title;
@@ -163,6 +164,7 @@ program
   .option('--summarize', 'Auto-summarize the scraped content', false)
   .option('--schema <name>', 'Use Zod schema (article, product, event, contact)', 'custom')
   .option('--output-json', 'Save structured JSON alongside Markdown', false)
+  .option('--no-cache', 'Bypass HTTP cache and force fresh request', false)
   .action(async (url, options) => {
     await initStorage(undefined, options.output);
     await performScrape(url, options);
@@ -185,6 +187,7 @@ program
   .option('--summarize', 'Auto-summarize the scraped content', false)
   .option('--schema <name>', 'Use Zod schema (article, product, event, contact)', 'custom')
   .option('--output-json', 'Save structured JSON alongside Markdown', false)
+  .option('--no-cache', 'Bypass HTTP cache and force fresh request', false)
   .action(async (file, options) => {
     await initStorage(undefined, options.output);
     const spinner = ora(`Reading URLs from ${file}...`).start();
