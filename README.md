@@ -14,6 +14,7 @@ A terminal-first, developer-grade web scraping tool built in Node.js. It extract
 - **Subcommands**:
   - `scrape <url>`: Scrape a single URL.
   - `batch <file>`: Process multiple URLs listed in a text file.
+  - `spider <url>`: Recursively crawl and scrape an entire website under the same origin.
   - `list`: Show database history of past scrapes.
   - `show <id>`: Print Markdown content of a past scrape from DB.
   - `export <id>`: Re-export scraped Markdown to a custom output path.
@@ -110,6 +111,12 @@ node src/cli.js scrape https://example.com/blog-post-1 --category blog
 ### Filter Scrapes List by Category
 ```bash
 node src/cli.js list --category TechNews
+```
+
+### Spider and Crawl an Entire Website Recursively
+Traverse internal links and save them using directory structures matching the site layout:
+```bash
+node src/cli.js spider https://example.com --max-pages 50 --concurrency 3 --delay 1000
 ```
 
 ---
