@@ -732,7 +732,11 @@
                   <iframe 
                     ref={iframeRef}
                     src={iframeUrl} 
-                    onLoad={() => setLoading(false)}
+                    onLoad={() => {
+                      if (!batchProgress) {
+                        setLoading(false);
+                      }
+                    }}
                     class="w-full h-full border-none bg-white"
                   ></iframe>
                 ) : (
