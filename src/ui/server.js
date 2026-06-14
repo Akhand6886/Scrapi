@@ -7,7 +7,7 @@ import * as cheerio from 'cheerio';
 import path from 'path';
 import fs from 'fs/promises';
 import { fileURLToPath } from 'url';
-import { initStorage, getAllProfiles, saveProfile, getAllScrapes, insertScrape, saveMarkdownFile } from '../storage.js';
+import { initStorage, getAllProfiles, saveProfile, getAllScrapes, insertScrape, saveMarkdownFile, downloadMediaFiles } from '../storage.js';
 import { scrapePage, discoverCategories, autoDetectLinkSelector } from '../scraper.js';
 import { runSpider } from '../spider.js';
 
