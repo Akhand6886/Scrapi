@@ -1,7 +1,12 @@
 import axios from 'axios';
 import * as cheerio from 'cheerio';
 import TurndownService from 'turndown';
+import http from 'http';
+import https from 'https';
 import { getCachedPage, saveCachedPage } from './storage.js';
+
+const httpAgent = new http.Agent({ keepAlive: true });
+const httpsAgent = new https.Agent({ keepAlive: true });
 
 /**
  * Fetches HTML from a given URL with options. Supports HTTP Conditional Caching (ETag/Last-Modified).
@@ -44,6 +49,8 @@ export async function fetchHtml(url, options = {}) {
       maxContentLength: 5 * 1024 * 1024, // Protect system: max download limit 5MB
       responseType: 'text',
       headers,
+      httpAgent,
+      httpsAgent,
       validateStatus: (status) => (status >= 200 && status < 300) || status === 304
     });
 
@@ -92,10 +99,7 @@ export function cleanDom($) {
     '.cookie-banner', '.popup', '.ad', '.advertisement',
     '[aria-hidden="true"]', '#cookie-consent', '.social-share'
   ];
-
-  noiseSelectors.forEach(selector => {
-    $(selector).remove();
-  });
+  $(noiseSelectors.join(', ')).remove();
 }
 
 /**
