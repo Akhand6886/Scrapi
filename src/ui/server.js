@@ -8,7 +8,7 @@ import path from 'path';
 import fs from 'fs/promises';
 import { fileURLToPath } from 'url';
 import { initStorage, getAllProfiles, saveProfile, getAllScrapes, insertScrape, saveMarkdownFile } from '../storage.js';
-import { scrapePage } from '../scraper.js';
+import { scrapePage, discoverCategories } from '../scraper.js';
 import { runSpider } from '../spider.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -339,6 +339,20 @@ app.get('/api/scrapes', (req, res) => {
     const category = req.query.category || null;
     const scrapes = getAllScrapes(category);
     res.json(scrapes);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// POST get categories for a given URL
+app.post('/api/categories', async (req, res) => {
+  const { url } = req.body;
+  if (!url) {
+    return res.status(400).json({ error: 'Missing url' });
+  }
+  try {
+    const categories = await discoverCategories(url);
+    res.json({ categories });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
