@@ -9,6 +9,7 @@ import fs from 'fs/promises';
 import { fileURLToPath } from 'url';
 import { initStorage, getAllProfiles, saveProfile, getAllScrapes, insertScrape, saveMarkdownFile } from '../storage.js';
 import { scrapePage } from '../scraper.js';
+import { runSpider } from '../spider.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -16,6 +17,22 @@ const __dirname = path.dirname(__filename);
 const app = express();
 app.use(cors());
 app.use(express.json());
+
+// Global state tracking the active website spider crawl
+let activeSpider = {
+  running: false,
+  seedUrl: '',
+  stats: {
+    visited: 0,
+    queued: 0,
+    succeeded: 0,
+    failed: 0
+  },
+  logs: [],
+  promise: null,
+  aborted: false,
+  options: null
+};
 
 // Shared long-lived headless browser instance to reduce CPU and memory usage
 let sharedBrowser = null;
@@ -357,6 +374,78 @@ app.post('/api/scrape', async (req, res) => {
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
+});
+
+// POST start website spider
+app.post('/api/spider', async (req, res) => {
+  const { url, depth, maxPages, concurrency, delay, category } = req.body;
+  if (!url) {
+    return res.status(400).json({ error: 'Missing url' });
+  }
+
+  if (activeSpider.running) {
+    return res.status(400).json({ error: 'Another spider job is already running.' });
+  }
+
+  const hostName = new URL(url).hostname;
+  const spiderOptions = {
+    depth: depth !== undefined && depth !== null ? (depth === 'Infinity' ? Infinity : parseInt(depth, 10)) : Infinity,
+    maxPages: maxPages !== undefined ? parseInt(maxPages, 10) : 100,
+    concurrency: concurrency !== undefined ? parseInt(concurrency, 10) : 2,
+    delay: delay !== undefined ? parseInt(delay, 10) : 1500,
+    category: category || hostName,
+    aborted: false
+  };
+
+  activeSpider.running = true;
+  activeSpider.seedUrl = url;
+  activeSpider.aborted = false;
+  activeSpider.logs = [`[System] Spider initialized on ${url}`];
+  activeSpider.stats = { visited: 0, queued: 0, succeeded: 0, failed: 0 };
+  activeSpider.options = spiderOptions;
+  
+  activeSpider.promise = runSpider(url, spiderOptions, (evt) => {
+    if (evt.type === 'log') {
+      activeSpider.logs.push(evt.message);
+      if (activeSpider.logs.length > 200) {
+        activeSpider.logs.shift(); // keep max 200 logs
+      }
+    } else if (evt.type === 'progress') {
+      activeSpider.stats = evt.stats;
+    }
+  }).then((results) => {
+    activeSpider.running = false;
+    activeSpider.logs.push(`[System] Crawl complete! Visited ${results.visited} pages.`);
+  }).catch((err) => {
+    activeSpider.running = false;
+    activeSpider.logs.push(`[System] Crawl encountered error: ${err.message}`);
+  });
+
+  res.json({ success: true, message: 'Spider started' });
+});
+
+// GET active/last spider status
+app.get('/api/spider', (req, res) => {
+  res.json({
+    running: activeSpider.running,
+    seedUrl: activeSpider.seedUrl,
+    stats: activeSpider.stats,
+    logs: activeSpider.logs,
+    aborted: activeSpider.aborted
+  });
+});
+
+// POST cancel running spider
+app.post('/api/spider/cancel', (req, res) => {
+  if (!activeSpider.running) {
+    return res.status(400).json({ error: 'No spider job is running.' });
+  }
+  if (activeSpider.options) {
+    activeSpider.options.aborted = true;
+  }
+  activeSpider.aborted = true;
+  activeSpider.logs.push('[System] Crawl termination signal received. Stopping workers...');
+  res.json({ success: true, message: 'Spider cancelled' });
 });
 
 // POST kill/shutdown server
