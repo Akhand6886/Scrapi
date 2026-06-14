@@ -142,6 +142,9 @@
       const [batchConcurrency, setBatchConcurrency] = useState(2);
       const [batchDelay, setBatchDelay] = useState(1500);
 
+      const [discoveredCategories, setDiscoveredCategories] = useState([]);
+      const [syncingCategories, setSyncingCategories] = useState(false);
+
       // Loading/UI states
       const [activeTab, setActiveTab] = useState('iframe'); // 'iframe' | 'markdown'
       const [iframeUrl, setIframeUrl] = useState('');
@@ -548,6 +551,32 @@
         }, 1200);
       };
 
+      const handleSyncCategories = async () => {
+        if (!url) {
+          showToast('Please enter a Target URL first to sync categories.', 'error');
+          return;
+        }
+        setSyncingCategories(true);
+        setDiscoveredCategories([]);
+        try {
+          const data = await safeFetchJson('/api/categories', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ url })
+          });
+          if (data.categories && data.categories.length > 0) {
+            setDiscoveredCategories(data.categories);
+            showToast(`Found ${data.categories.length} categories!`, 'success');
+          } else {
+            showToast('No categories found on this page.', 'error');
+          }
+        } catch (err) {
+          showToast(err.message, 'error');
+        } finally {
+          setSyncingCategories(false);
+        }
+      };
+
       return (
         <div class="flex-1 flex flex-col h-full overflow-hidden">
           {/* Header */}
@@ -756,7 +785,12 @@
                   <h2 class="text-sm font-bold tracking-wider text-gray-400 uppercase">Batch Scraping</h2>
                   
                   <div class="space-y-2">
-                    <label class="text-xs text-gray-400 font-medium">Target URL</label>
+                    <label class="text-xs text-gray-400 font-medium flex justify-between">
+                      <span>Target URL</span>
+                      <button onClick={handleSyncCategories} disabled={syncingCategories || !url} class="text-[10px] text-blue-400 hover:text-blue-300 disabled:opacity-50">
+                        {syncingCategories ? 'Syncing...' : '🔄 Sync Categories'}
+                      </button>
+                    </label>
                     <input 
                       type="url" 
                       placeholder="https://example.com/item" 
@@ -764,6 +798,28 @@
                       onChange={e => setUrl(e.target.value)}
                       class="w-full px-3 py-2 bg-dark-950/80 border border-white/10 rounded-lg text-sm text-gray-200 placeholder-gray-500 focus:outline-none focus:border-blue-500 transition-colors"
                     />
+                    
+                    {discoveredCategories.length > 0 && (
+                      <div class="mt-2 p-2 bg-white/5 border border-white/10 rounded-lg max-h-32 overflow-y-auto custom-scrollbar">
+                        <div class="text-[10px] text-gray-400 mb-1">Select a Category:</div>
+                        <div class="flex flex-wrap gap-1.5">
+                          {discoveredCategories.map((c, i) => (
+                            <button
+                              key={i}
+                              onClick={() => {
+                                setUrl(c.url);
+                                setCategory(c.name.toLowerCase().replace(/[^a-z0-9]+/g, '-'));
+                                setDiscoveredCategories([]); // hide after selection
+                              }}
+                              class="px-2 py-1 bg-dark-950 border border-blue-500/30 text-blue-400 hover:bg-blue-500/10 rounded text-[10px] transition-colors"
+                              title={c.url}
+                            >
+                              {c.name}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                    )}
                   </div>
 
                   <div class="space-y-2">
