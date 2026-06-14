@@ -131,7 +131,7 @@ function generateHealedSelector($, elem) {
     }
     const classAttr = $(current).attr('class');
     if (classAttr) {
-      const classes = classAttr.trim().split(/\s+/).filter(c => c && !c.startsWith('scrapi-'));
+      const classes = classAttr.trim().split(/\s+/).filter(c => c && !c.startsWith('scrapi-') && /^[a-zA-Z0-9_-]+$/.test(c));
       if (classes.length > 0) {
         tag += '.' + classes[0]; // use first class for minimal selector
       }
