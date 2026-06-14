@@ -79,8 +79,11 @@ export async function initStorage(dbDir = './data', outputDir = './output') {
  * @returns {Promise<string>} File path where saved
  */
 export async function saveMarkdownFile(markdown, metadata, options = {}) {
-  let outputDir = options.output || './output';
-  if (options.category) {
+  const baseOutputDir = options.output || './output';
+  let outputDir = baseOutputDir;
+  if (options.subdir) {
+    outputDir = path.join(outputDir, options.subdir);
+  } else if (options.category) {
     outputDir = path.join(outputDir, options.category);
   }
   await fs.mkdir(outputDir, { recursive: true });
@@ -122,7 +125,7 @@ export async function saveMarkdownFile(markdown, metadata, options = {}) {
   fileContent += markdown;
 
   await fs.writeFile(fullPath, fileContent, 'utf-8');
-  return filename;
+  return path.relative(baseOutputDir, fullPath);
 }
 
 /**
@@ -132,14 +135,11 @@ export async function saveMarkdownFile(markdown, metadata, options = {}) {
  * @param {object} options 
  */
 export async function saveJsonFile(jsonData, filename, options = {}) {
-  let outputDir = options.output || './output';
-  if (options.category) {
-    outputDir = path.join(outputDir, options.category);
-  }
-  await fs.mkdir(outputDir, { recursive: true });
-
+  const baseOutputDir = options.output || './output';
   const jsonFilename = filename.replace(/\.md$/, '.json');
-  const fullPath = path.join(outputDir, jsonFilename);
+  const fullPath = path.join(baseOutputDir, jsonFilename);
+  
+  await fs.mkdir(path.dirname(fullPath), { recursive: true });
   await fs.writeFile(fullPath, JSON.stringify(jsonData, null, 2), 'utf-8');
   return jsonFilename;
 }
