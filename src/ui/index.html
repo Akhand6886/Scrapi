@@ -122,6 +122,7 @@
       const [activeSignature, setActiveSignature] = useState(null);
       const [profileName, setProfileName] = useState('');
       const [includeImages, setIncludeImages] = useState(false);
+      const [downloadMedia, setDownloadMedia] = useState(false);
       const [noMeta, setNoMeta] = useState(false);
       const [renderMode, setRenderMode] = useState('static'); // 'static' | 'dynamic'
 
@@ -266,7 +267,8 @@
               maxPages: parseInt(spiderMaxPages, 10),
               concurrency: parseInt(spiderConcurrency, 10),
               delay: parseInt(spiderDelay, 10),
-              category: category.trim() || null
+              category: category.trim() || null,
+              downloadMedia
             })
           });
           showToast('Spider crawl started!', 'success');
@@ -312,6 +314,7 @@
               url,
               selector: selector || 'auto',
               images: includeImages,
+              downloadMedia,
               noMeta,
               category: category.trim() || null
             })
@@ -400,6 +403,7 @@
                   url: targetUrl,
                   selector: 'auto', // use auto-detector for final body extraction on subpages
                   images: includeImages,
+                  downloadMedia,
                   noMeta: noMeta,
                   category: category.trim() || null
                 })
@@ -723,6 +727,15 @@
                           class="rounded bg-dark-950 border-white/10 text-blue-500 mr-2 focus:ring-0 focus:ring-offset-0"
                         />
                         Include Images
+                      </label>
+                      <label class="flex items-center text-xs text-gray-400 cursor-pointer">
+                        <input 
+                          type="checkbox" 
+                          checked={downloadMedia} 
+                          onChange={e => setDownloadMedia(e.target.checked)}
+                          class="rounded bg-dark-950 border-white/10 text-blue-500 mr-2 focus:ring-0 focus:ring-offset-0"
+                        />
+                        Download Media
                       </label>
                       <label class="flex items-center text-xs text-gray-400 cursor-pointer">
                         <input 
