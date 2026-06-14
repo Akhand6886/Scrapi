@@ -126,10 +126,24 @@
             fetch('/api/profiles'),
             fetch(`/api/scrapes${urlParams}`)
           ]);
-          if (profRes.ok) setProfiles(await profRes.json());
-          if (histRes.ok) setHistory(await histRes.json());
+
+          if (!profRes.ok || !histRes.ok) {
+            throw new Error(`API status errors: ${profRes.status} / ${histRes.status}`);
+          }
+
+          const profContentType = profRes.headers.get('content-type') || '';
+          const histContentType = histRes.headers.get('content-type') || '';
+
+          if (!profContentType.includes('application/json') || !histContentType.includes('application/json')) {
+            showToast('Visual Console loaded outside port 3001. Please open http://localhost:3001/ in your browser.', 'error');
+            return;
+          }
+
+          setProfiles(await profRes.json());
+          setHistory(await histRes.json());
         } catch (err) {
           console.error("Failed to fetch initial data", err);
+          showToast(`Connection error: Make sure server.js is running and you are accessing http://localhost:3001/`, 'error');
         }
       };
 
