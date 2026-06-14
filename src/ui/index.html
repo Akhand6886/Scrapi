@@ -84,6 +84,17 @@
       const [includeImages, setIncludeImages] = useState(false);
       const [noMeta, setNoMeta] = useState(false);
       const [renderMode, setRenderMode] = useState('static'); // 'static' | 'dynamic'
+
+      // Console mode & Spider state
+      const [consoleMode, setConsoleMode] = useState('single'); // 'single' | 'batch' | 'spider'
+      const [spiderActive, setSpiderActive] = useState(false);
+      const [spiderStats, setSpiderStats] = useState({ visited: 0, queued: 0, succeeded: 0, failed: 0 });
+      const [spiderLogs, setSpiderLogs] = useState([]);
+      const [spiderDepth, setSpiderDepth] = useState('Infinity');
+      const [spiderMaxPages, setSpiderMaxPages] = useState(100);
+      const [spiderConcurrency, setSpiderConcurrency] = useState(2);
+      const [spiderDelay, setSpiderDelay] = useState(1500);
+
       const [discoveredUrls, setDiscoveredUrls] = useState([]);
       const [discovering, setDiscovering] = useState(false);
       const [batchProgress, setBatchProgress] = useState(null); // { active: false, current: 0, total: 0, succeeded: 0, failed: 0 }
@@ -125,6 +136,17 @@
       useEffect(() => {
         loadData();
 
+        // Check active spider status on boot
+        fetch('/api/spider')
+          .then(res => res.json())
+          .then(data => {
+            if (data.running) {
+              setSpiderActive(true);
+              setSpiderStats(data.stats || { visited: 0, queued: 0, succeeded: 0, failed: 0 });
+              setSpiderLogs(data.logs || []);
+            }
+          }).catch(err => console.error(err));
+
         // Listen for selector clicked or navigation in iframe proxy
         const handleIframeMessage = (event) => {
           if (event.data) {
@@ -157,6 +179,82 @@
         window.addEventListener('message', handleIframeMessage);
         return () => window.removeEventListener('message', handleIframeMessage);
       }, []);
+
+      // Spider status polling effect
+      useEffect(() => {
+        let timer = null;
+        if (spiderActive) {
+          timer = setInterval(async () => {
+            try {
+              const res = await fetch('/api/spider');
+              if (res.ok) {
+                const data = await res.json();
+                setSpiderStats(data.stats || { visited: 0, queued: 0, succeeded: 0, failed: 0 });
+                setSpiderLogs(data.logs || []);
+                if (!data.running) {
+                  setSpiderActive(false);
+                  showToast('Spider crawling finished!', 'success');
+                  loadData(); // reload history
+                }
+              }
+            } catch (err) {
+              console.error(err);
+            }
+          }, 1000);
+        }
+        return () => {
+          if (timer) clearInterval(timer);
+        };
+      }, [spiderActive]);
+
+      const handleStartSpider = async () => {
+        if (!url) {
+          showToast('Please enter a target URL first.', 'error');
+          return;
+        }
+        setSpiderActive(true);
+        setSpiderLogs(['[System] Requesting spider startup...']);
+        
+        try {
+          const res = await fetch('/api/spider', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              url,
+              depth: spiderDepth === 'Infinity' ? 'Infinity' : parseInt(spiderDepth, 10),
+              maxPages: parseInt(spiderMaxPages, 10),
+              concurrency: parseInt(spiderConcurrency, 10),
+              delay: parseInt(spiderDelay, 10),
+              category: category.trim() || null
+            })
+          });
+          
+          if (!res.ok) {
+            const data = await res.json();
+            showToast(data.error || 'Failed to start spider.', 'error');
+            setSpiderActive(false);
+          } else {
+            showToast('Spider crawl started!', 'success');
+          }
+        } catch (err) {
+          showToast(err.message, 'error');
+          setSpiderActive(false);
+        }
+      };
+
+      const handleCancelSpider = async () => {
+        try {
+          const res = await fetch('/api/spider/cancel', { method: 'POST' });
+          if (res.ok) {
+            showToast('Crawl cancel signal sent.', 'info');
+          } else {
+            const data = await res.json();
+            showToast(data.error || 'Failed to cancel crawl.', 'error');
+          }
+        } catch (err) {
+          showToast(err.message, 'error');
+        }
+      };
 
       // Trigger proxy page render
       const handleLoadProxy = () => {
@@ -465,184 +563,399 @@
             {/* Left Control Panel */}
             <section class="w-96 flex flex-col border-r border-white/5 glass overflow-y-auto custom-scrollbar p-6 space-y-6 shrink-0">
               
-              {/* Card: Target URL Input */}
-              <div class="space-y-4">
-                <h2 class="text-sm font-bold tracking-wider text-gray-400 uppercase">1. Targeting</h2>
-                
-                <div class="space-y-2">
-                  <label class="text-xs text-gray-400 font-medium">Target URL</label>
-                  <input 
-                    type="url" 
-                    placeholder="https://example.com/item" 
-                    value={url} 
-                    onChange={e => setUrl(e.target.value)}
-                    class="w-full px-3 py-2 bg-dark-950/80 border border-white/10 rounded-lg text-sm text-gray-200 placeholder-gray-500 focus:outline-none focus:border-blue-500 transition-colors"
-                  />
-                </div>
-
-                <div class="space-y-2">
-                  <label class="text-xs text-gray-400 font-medium">Category</label>
-                  <input 
-                    type="text" 
-                    placeholder="e.g. blog, news (optional)" 
-                    value={category} 
-                    onChange={e => setCategory(e.target.value)}
-                    class="w-full px-3 py-2 bg-dark-950/80 border border-white/10 rounded-lg text-sm text-gray-200 placeholder-gray-500 focus:outline-none focus:border-blue-500 transition-colors"
-                  />
-                </div>
-
-                {/* Render Mode Toggle */}
-                <div class="space-y-1.5">
-                  <label class="text-xs text-gray-400 font-medium">Render Mode</label>
-                  <div class="flex bg-dark-950/60 rounded-lg p-1 border border-white/10">
-                    <button
-                      onClick={() => setRenderMode('static')}
-                      class={`flex-1 py-1 text-xs font-semibold rounded transition-all ${renderMode === 'static' ? 'bg-blue-600 text-white shadow' : 'text-gray-400 hover:text-gray-200'}`}
-                      title="Load fast static HTML via Axios (lightweight, minimal CPU/RAM)"
-                    >
-                      ⚡ Static (Fast)
-                    </button>
-                    <button
-                      onClick={() => setRenderMode('dynamic')}
-                      class={`flex-1 py-1 text-xs font-semibold rounded transition-all ${renderMode === 'dynamic' ? 'bg-blue-600 text-white shadow' : 'text-gray-400 hover:text-gray-200'}`}
-                      title="Load dynamic SPA via Playwright browser (requires Chromium backend)"
-                    >
-                      🌐 Dynamic (JS)
-                    </button>
-                  </div>
-                </div>
-
-                <div class="flex space-x-2">
-                  <button 
-                    onClick={handleLoadProxy} 
-                    disabled={loading}
-                    class="flex-1 py-2 bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white rounded-lg text-sm font-semibold transition-all active:scale-95 flex items-center justify-center"
+              {/* Console Mode switcher */}
+              <div class="space-y-1.5 shrink-0">
+                <label class="text-[10px] text-gray-500 uppercase tracking-widest font-bold">Console Mode</label>
+                <div class="flex bg-dark-950/60 rounded-lg p-1 border border-white/10">
+                  <button
+                    onClick={() => setConsoleMode('single')}
+                    class={`flex-1 py-1.5 text-[11px] font-bold rounded transition-all ${consoleMode === 'single' ? 'bg-blue-600 text-white shadow' : 'text-gray-400 hover:text-gray-200'}`}
                   >
-                    <svg class="w-4 h-4 mr-1.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"/></svg>
-                    Proxy Page
+                    🕷️ Single
                   </button>
-                  <button 
-                    onClick={handleScrape} 
-                    disabled={loading}
-                    class="flex-1 py-2 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white rounded-lg text-sm font-semibold transition-all active:scale-95 flex items-center justify-center"
+                  <button
+                    onClick={() => setConsoleMode('batch')}
+                    class={`flex-1 py-1.5 text-[11px] font-bold rounded transition-all ${consoleMode === 'batch' ? 'bg-blue-600 text-white shadow' : 'text-gray-400 hover:text-gray-200'}`}
                   >
-                    <svg class="w-4 h-4 mr-1.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/></svg>
-                    Scrape Now
+                    ⚡ Batch
+                  </button>
+                  <button
+                    onClick={() => setConsoleMode('spider')}
+                    class={`flex-1 py-1.5 text-[11px] font-bold rounded transition-all ${consoleMode === 'spider' ? 'bg-blue-600 text-white shadow' : 'text-gray-400 hover:text-gray-200'}`}
+                  >
+                    🕸️ Spider
                   </button>
                 </div>
               </div>
 
-              {/* Card: Visual Selector Extraction */}
-              <div class="space-y-4 pt-4 border-t border-white/5">
-                <h2 class="text-sm font-bold tracking-wider text-gray-400 uppercase">2. Selector & Profile</h2>
-                
-                <div class="space-y-2">
-                  <label class="text-xs text-gray-400 font-medium">Selected Element Selector</label>
-                  <div class="flex space-x-2">
+              {consoleMode === 'single' && (
+                <div class="space-y-4 animate-fade-in">
+                  <h2 class="text-sm font-bold tracking-wider text-gray-400 uppercase">1. Targeting</h2>
+                  
+                  <div class="space-y-2">
+                    <label class="text-xs text-gray-400 font-medium">Target URL</label>
+                    <input 
+                      type="url" 
+                      placeholder="https://example.com/item" 
+                      value={url} 
+                      onChange={e => setUrl(e.target.value)}
+                      class="w-full px-3 py-2 bg-dark-950/80 border border-white/10 rounded-lg text-sm text-gray-200 placeholder-gray-500 focus:outline-none focus:border-blue-500 transition-colors"
+                    />
+                  </div>
+
+                  <div class="space-y-2">
+                    <label class="text-xs text-gray-400 font-medium">Category</label>
                     <input 
                       type="text" 
-                      placeholder="auto" 
-                      value={selector} 
-                      onChange={e => setSelector(e.target.value)}
-                      class="flex-1 px-3 py-2 bg-dark-950/80 border border-white/10 rounded-lg text-sm text-emerald-400 font-mono focus:outline-none focus:border-blue-500 transition-colors"
+                      placeholder="e.g. blog, news (optional)" 
+                      value={category} 
+                      onChange={e => setCategory(e.target.value)}
+                      class="w-full px-3 py-2 bg-dark-950/80 border border-white/10 rounded-lg text-sm text-gray-200 placeholder-gray-500 focus:outline-none focus:border-blue-500 transition-colors"
                     />
+                  </div>
+
+                  {/* Render Mode Toggle */}
+                  <div class="space-y-1.5">
+                    <label class="text-xs text-gray-400 font-medium">Render Mode</label>
+                    <div class="flex bg-dark-950/60 rounded-lg p-1 border border-white/10">
+                      <button
+                        onClick={() => setRenderMode('static')}
+                        class={`flex-1 py-1 text-xs font-semibold rounded transition-all ${renderMode === 'static' ? 'bg-blue-600 text-white shadow' : 'text-gray-400 hover:text-gray-200'}`}
+                        title="Load fast static HTML via Axios (lightweight, minimal CPU/RAM)"
+                      >
+                        ⚡ Static (Fast)
+                      </button>
+                      <button
+                        onClick={() => setRenderMode('dynamic')}
+                        class={`flex-1 py-1 text-xs font-semibold rounded transition-all ${renderMode === 'dynamic' ? 'bg-blue-600 text-white shadow' : 'text-gray-400 hover:text-gray-200'}`}
+                        title="Load dynamic SPA via Playwright browser (requires Chromium backend)"
+                      >
+                        🌐 Dynamic (JS)
+                      </button>
+                    </div>
+                  </div>
+
+                  <div class="flex space-x-2">
                     <button 
-                      onClick={() => {
-                        setSelector('');
-                        setDiscoveredUrls([]);
-                      }}
-                      class="px-2.5 bg-white/5 hover:bg-white/10 rounded-lg border border-white/10 text-gray-400 transition-colors"
-                      title="Clear Selector"
+                      onClick={handleLoadProxy} 
+                      disabled={loading}
+                      class="flex-1 py-2 bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white rounded-lg text-sm font-semibold transition-all active:scale-95 flex items-center justify-center"
                     >
-                      ✕
+                      <svg class="w-4 h-4 mr-1.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"/></svg>
+                      Proxy Page
+                    </button>
+                    <button 
+                      onClick={handleScrape} 
+                      disabled={loading}
+                      class="flex-1 py-2 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white rounded-lg text-sm font-semibold transition-all active:scale-95 flex items-center justify-center"
+                    >
+                      <svg class="w-4 h-4 mr-1.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/></svg>
+                      Scrape Now
                     </button>
                   </div>
-                </div>
 
-                {/* Link Discovery controls */}
-                <div class="flex space-x-2">
+                  {/* Card: Visual Selector Extraction */}
+                  <div class="space-y-4 pt-4 border-t border-white/5">
+                    <h2 class="text-sm font-bold tracking-wider text-gray-400 uppercase">2. Selector & Profile</h2>
+                    
+                    <div class="space-y-2">
+                      <label class="text-xs text-gray-400 font-medium">Selected Element Selector</label>
+                      <div class="flex space-x-2">
+                        <input 
+                          type="text" 
+                          placeholder="auto" 
+                          value={selector} 
+                          onChange={e => setSelector(e.target.value)}
+                          class="flex-1 px-3 py-2 bg-dark-950/80 border border-white/10 rounded-lg text-sm text-emerald-400 font-mono focus:outline-none focus:border-blue-500 transition-colors"
+                        />
+                        <button 
+                          onClick={() => {
+                            setSelector('');
+                            setDiscoveredUrls([]);
+                          }}
+                          class="px-2.5 bg-white/5 hover:bg-white/10 rounded-lg border border-white/10 text-gray-400 transition-colors"
+                          title="Clear Selector"
+                        >
+                          ✕
+                        </button>
+                      </div>
+                    </div>
+
+                    <div class="space-y-3">
+                      <label class="text-xs text-gray-400 font-medium">Save As Profile</label>
+                      <div class="flex space-x-2">
+                        <input 
+                          type="text" 
+                          placeholder="Profile Name" 
+                          value={profileName} 
+                          onChange={e => setProfileName(e.target.value)}
+                          class="flex-1 px-3 py-2 bg-dark-950/80 border border-white/10 rounded-lg text-sm text-gray-200 focus:outline-none focus:border-blue-500 transition-colors"
+                        />
+                        <button 
+                          onClick={handleSaveProfile}
+                          class="px-4 bg-white/5 hover:bg-white/10 rounded-lg border border-white/10 text-sm font-semibold transition-colors text-blue-400 active:scale-95"
+                        >
+                          Save
+                        </button>
+                      </div>
+                    </div>
+
+                    {/* Settings Checkboxes */}
+                    <div class="flex items-center space-x-6 pt-1">
+                      <label class="flex items-center text-xs text-gray-400 cursor-pointer">
+                        <input 
+                          type="checkbox" 
+                          checked={includeImages} 
+                          onChange={e => setIncludeImages(e.target.checked)}
+                          class="rounded bg-dark-950 border-white/10 text-blue-500 mr-2 focus:ring-0 focus:ring-offset-0"
+                        />
+                        Include Images
+                      </label>
+                      <label class="flex items-center text-xs text-gray-400 cursor-pointer">
+                        <input 
+                          type="checkbox" 
+                          checked={noMeta} 
+                          onChange={e => setNoMeta(e.target.checked)}
+                          class="rounded bg-dark-950 border-white/10 text-blue-500 mr-2 focus:ring-0 focus:ring-offset-0"
+                        />
+                        Skip Meta
+                      </label>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {consoleMode === 'batch' && (
+                <div class="space-y-4 animate-fade-in">
+                  <h2 class="text-sm font-bold tracking-wider text-gray-400 uppercase">Batch Scraping</h2>
+                  
+                  <div class="space-y-2">
+                    <label class="text-xs text-gray-400 font-medium">Target URL</label>
+                    <input 
+                      type="url" 
+                      placeholder="https://example.com/item" 
+                      value={url} 
+                      onChange={e => setUrl(e.target.value)}
+                      class="w-full px-3 py-2 bg-dark-950/80 border border-white/10 rounded-lg text-sm text-gray-200 placeholder-gray-500 focus:outline-none focus:border-blue-500 transition-colors"
+                    />
+                  </div>
+
+                  <div class="space-y-2">
+                    <label class="text-xs text-gray-400 font-medium">Category</label>
+                    <input 
+                      type="text" 
+                      placeholder="e.g. blog, news (optional)" 
+                      value={category} 
+                      onChange={e => setCategory(e.target.value)}
+                      class="w-full px-3 py-2 bg-dark-950/80 border border-white/10 rounded-lg text-sm text-gray-200 placeholder-gray-500 focus:outline-none focus:border-blue-500 transition-colors"
+                    />
+                  </div>
+
+                  <div class="space-y-2">
+                    <label class="text-xs text-gray-400 font-medium">Link Selector</label>
+                    <div class="flex space-x-2">
+                      <input 
+                        type="text" 
+                        placeholder="a.story-link" 
+                        value={selector} 
+                        onChange={e => setSelector(e.target.value)}
+                        class="flex-1 px-3 py-2 bg-dark-950/80 border border-white/10 rounded-lg text-sm text-emerald-400 font-mono focus:outline-none focus:border-blue-500 transition-colors"
+                      />
+                    </div>
+                  </div>
+
                   <button 
                     onClick={handleDiscoverLinks} 
                     disabled={loading || discovering || !selector}
-                    class="flex-1 py-1.5 bg-brand-600/80 hover:bg-brand-600 disabled:opacity-40 text-white rounded-lg text-xs font-semibold transition-all active:scale-95 flex items-center justify-center border border-brand-500/20"
-                    title="Extract all links on page matching CSS Selector"
+                    class="w-full py-2 bg-brand-600/80 hover:bg-brand-600 disabled:opacity-40 text-white rounded-lg text-sm font-semibold transition-all active:scale-95 flex items-center justify-center border border-brand-500/20 shadow-md"
                   >
                     {discovering ? '🔍 Searching...' : '🔍 Discover Links'}
                   </button>
-                </div>
 
-                {/* Discovered URLs list & live scrape */}
-                {discoveredUrls.length > 0 && (
-                  <div class="space-y-2.5 bg-white/5 border border-white/5 p-3 rounded-xl">
-                    <div class="flex justify-between items-center">
-                      <span class="text-xs font-bold text-gray-300">📄 {discoveredUrls.length} Links Found</span>
+                  {/* Discovered URLs list & live scrape */}
+                  {discoveredUrls.length > 0 && (
+                    <div class="space-y-2.5 bg-white/5 border border-white/5 p-3 rounded-xl">
+                      <div class="flex justify-between items-center">
+                        <span class="text-xs font-bold text-gray-300">📄 {discoveredUrls.length} Links Found</span>
+                        <button
+                          onClick={() => setDiscoveredUrls([])}
+                          class="text-[10px] text-gray-500 hover:text-gray-300"
+                        >
+                          Clear
+                        </button>
+                      </div>
+                      
+                      <div class="max-h-28 overflow-y-auto custom-scrollbar space-y-1 p-1.5 bg-dark-950/80 rounded-lg border border-white/5">
+                        {discoveredUrls.map((u, i) => (
+                          <div key={i} class="text-[9px] text-gray-400 truncate font-mono" title={u}>
+                            • {u}
+                          </div>
+                        ))}
+                      </div>
+
                       <button
-                        onClick={() => setDiscoveredUrls([])}
-                        class="text-[10px] text-gray-500 hover:text-gray-300"
+                        onClick={handleStartBatchScrape}
+                        disabled={loading || batchProgress?.active}
+                        class="w-full py-1.5 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white rounded-lg text-xs font-semibold transition-all flex items-center justify-center active:scale-95 shadow-lg"
                       >
-                        Clear
+                        ⚡ Start Live Batch Scrape
                       </button>
                     </div>
-                    
-                    <div class="max-h-24 overflow-y-auto custom-scrollbar space-y-1 p-1.5 bg-dark-950/80 rounded-lg border border-white/5">
-                      {discoveredUrls.map((u, i) => (
-                        <div key={i} class="text-[9px] text-gray-400 truncate font-mono" title={u}>
-                          • {u}
-                        </div>
-                      ))}
-                    </div>
+                  )}
 
-                    <button
-                      onClick={handleStartBatchScrape}
-                      disabled={loading || batchProgress?.active}
-                      class="w-full py-1.5 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white rounded-lg text-xs font-semibold transition-all flex items-center justify-center active:scale-95 shadow-lg"
-                    >
-                      ⚡ Start Live Batch Scrape
-                    </button>
+                  {/* Settings Checkboxes */}
+                  <div class="flex items-center space-x-6 pt-1 border-t border-white/5">
+                    <label class="flex items-center text-xs text-gray-400 cursor-pointer">
+                      <input 
+                        type="checkbox" 
+                        checked={includeImages} 
+                        onChange={e => setIncludeImages(e.target.checked)}
+                        class="rounded bg-dark-950 border-white/10 text-blue-500 mr-2 focus:ring-0 focus:ring-offset-0"
+                      />
+                      Include Images
+                    </label>
+                    <label class="flex items-center text-xs text-gray-400 cursor-pointer">
+                      <input 
+                        type="checkbox" 
+                        checked={noMeta} 
+                        onChange={e => setNoMeta(e.target.checked)}
+                        class="rounded bg-dark-950 border-white/10 text-blue-500 mr-2 focus:ring-0 focus:ring-offset-0"
+                      />
+                      Skip Meta
+                    </label>
                   </div>
-                )}
+                </div>
+              )}
 
-                <div class="space-y-3">
-                  <label class="text-xs text-gray-400 font-medium">Save As Profile</label>
-                  <div class="flex space-x-2">
+              {consoleMode === 'spider' && (
+                <div class="space-y-4 animate-fade-in">
+                  <h2 class="text-sm font-bold tracking-wider text-gray-400 uppercase">Website Spider</h2>
+                  
+                  <div class="space-y-2">
+                    <label class="text-xs text-gray-400 font-medium">Seed URL</label>
+                    <input 
+                      type="url" 
+                      placeholder="https://example.com" 
+                      value={url} 
+                      onChange={e => setUrl(e.target.value)}
+                      class="w-full px-3 py-2 bg-dark-950/80 border border-white/10 rounded-lg text-sm text-gray-200 placeholder-gray-500 focus:outline-none focus:border-blue-500 transition-colors"
+                    />
+                  </div>
+
+                  <div class="space-y-2">
+                    <label class="text-xs text-gray-400 font-medium">Category</label>
                     <input 
                       type="text" 
-                      placeholder="Profile Name" 
-                      value={profileName} 
-                      onChange={e => setProfileName(e.target.value)}
-                      class="flex-1 px-3 py-2 bg-dark-950/80 border border-white/10 rounded-lg text-sm text-gray-200 focus:outline-none focus:border-blue-500 transition-colors"
+                      placeholder="e.g. docs, wiki (optional)" 
+                      value={category} 
+                      onChange={e => setCategory(e.target.value)}
+                      class="w-full px-3 py-2 bg-dark-950/80 border border-white/10 rounded-lg text-sm text-gray-200 placeholder-gray-500 focus:outline-none focus:border-blue-500 transition-colors"
                     />
-                    <button 
-                      onClick={handleSaveProfile}
-                      class="px-4 bg-white/5 hover:bg-white/10 rounded-lg border border-white/10 text-sm font-semibold transition-colors text-blue-400 active:scale-95"
-                    >
-                      Save
-                    </button>
                   </div>
-                </div>
 
-                {/* Settings Checkboxes */}
-                <div class="flex items-center space-x-6 pt-1">
-                  <label class="flex items-center text-xs text-gray-400 cursor-pointer">
-                    <input 
-                      type="checkbox" 
-                      checked={includeImages} 
-                      onChange={e => setIncludeImages(e.target.checked)}
-                      class="rounded bg-dark-950 border-white/10 text-blue-500 mr-2 focus:ring-0 focus:ring-offset-0"
-                    />
-                    Include Images
-                  </label>
-                  <label class="flex items-center text-xs text-gray-400 cursor-pointer">
-                    <input 
-                      type="checkbox" 
-                      checked={noMeta} 
-                      onChange={e => setNoMeta(e.target.checked)}
-                      class="rounded bg-dark-950 border-white/10 text-blue-500 mr-2 focus:ring-0 focus:ring-offset-0"
-                    />
-                    Skip Meta
-                  </label>
+                  <div class="grid grid-cols-2 gap-2">
+                    <div class="space-y-1">
+                      <label class="text-[10px] text-gray-400 font-medium">Max Depth</label>
+                      <input 
+                        type="text" 
+                        value={spiderDepth} 
+                        onChange={e => setSpiderDepth(e.target.value)}
+                        class="w-full px-2.5 py-1.5 bg-dark-950/80 border border-white/10 rounded-lg text-xs text-gray-200 focus:outline-none focus:border-blue-500"
+                      />
+                    </div>
+                    <div class="space-y-1">
+                      <label class="text-[10px] text-gray-400 font-medium">Max Pages</label>
+                      <input 
+                        type="number" 
+                        value={spiderMaxPages} 
+                        onChange={e => setSpiderMaxPages(e.target.value)}
+                        class="w-full px-2.5 py-1.5 bg-dark-950/80 border border-white/10 rounded-lg text-xs text-gray-200 focus:outline-none focus:border-blue-500"
+                      />
+                    </div>
+                  </div>
+
+                  <div class="grid grid-cols-2 gap-2">
+                    <div class="space-y-1">
+                      <label class="text-[10px] text-gray-400 font-medium">Concurrency</label>
+                      <input 
+                        type="number" 
+                        value={spiderConcurrency} 
+                        onChange={e => setSpiderConcurrency(e.target.value)}
+                        class="w-full px-2.5 py-1.5 bg-dark-950/80 border border-white/10 rounded-lg text-xs text-gray-200 focus:outline-none focus:border-blue-500"
+                      />
+                    </div>
+                    <div class="space-y-1">
+                      <label class="text-[10px] text-gray-400 font-medium">Delay (ms)</label>
+                      <input 
+                        type="number" 
+                        value={spiderDelay} 
+                        onChange={e => setSpiderDelay(e.target.value)}
+                        class="w-full px-2.5 py-1.5 bg-dark-950/80 border border-white/10 rounded-lg text-xs text-gray-200 focus:outline-none focus:border-blue-500"
+                      />
+                    </div>
+                  </div>
+
+                  <button 
+                    onClick={handleStartSpider} 
+                    disabled={spiderActive}
+                    class="w-full py-2 bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 disabled:cursor-not-allowed text-white rounded-lg text-sm font-semibold transition-all active:scale-95 flex items-center justify-center shadow-lg"
+                  >
+                    {spiderActive ? '🕸️ Crawling Website...' : '🕸️ Start Site Spider'}
+                  </button>
+
+                  {(spiderActive || spiderLogs.length > 0) && (
+                    <div class="space-y-3 bg-white/5 border border-white/5 p-4 rounded-xl animate-fade-in font-sans">
+                      <div class="flex justify-between items-center">
+                        <span class="text-xs font-bold text-gray-300">Crawl Progress</span>
+                        {spiderActive ? (
+                          <span class="px-2 py-0.5 bg-indigo-500/10 text-indigo-400 text-[9px] rounded-full border border-indigo-500/20 font-bold animate-pulse">CRAWLING</span>
+                        ) : (
+                          <span class="px-2 py-0.5 bg-emerald-500/10 text-emerald-400 text-[9px] rounded-full border border-emerald-500/20 font-bold">FINISHED</span>
+                        )}
+                      </div>
+
+                      {/* Stats grid */}
+                      <div class="grid grid-cols-4 gap-1.5 text-center">
+                        <div class="bg-dark-950/60 p-1.5 rounded-lg border border-white/5">
+                          <div class="text-[9px] text-gray-500">Visited</div>
+                          <div class="text-[11px] font-bold text-gray-200">{spiderStats.visited}</div>
+                        </div>
+                        <div class="bg-dark-950/60 p-1.5 rounded-lg border border-white/5">
+                          <div class="text-[9px] text-gray-500">Queue</div>
+                          <div class="text-[11px] font-bold text-gray-200">{spiderStats.queued}</div>
+                        </div>
+                        <div class="bg-dark-950/60 p-1.5 rounded-lg border border-white/5">
+                          <div class="text-[9px] text-emerald-500">Ok</div>
+                          <div class="text-[11px] font-bold text-emerald-400">{spiderStats.succeeded}</div>
+                        </div>
+                        <div class="bg-dark-950/60 p-1.5 rounded-lg border border-white/5">
+                          <div class="text-[9px] text-red-500">Fail</div>
+                          <div class="text-[11px] font-bold text-red-400">{spiderStats.failed}</div>
+                        </div>
+                      </div>
+
+                      {/* Log output */}
+                      <div class="space-y-1">
+                        <div class="text-[10px] text-gray-400 font-semibold">Crawl Logs:</div>
+                        <div class="h-32 overflow-y-auto custom-scrollbar bg-dark-950 border border-white/5 p-2 rounded-lg text-[9px] font-mono text-gray-400 space-y-1">
+                          {spiderLogs.slice().reverse().map((log, idx) => (
+                            <div key={idx} class="truncate" title={log}>{log}</div>
+                          ))}
+                        </div>
+                      </div>
+
+                      {spiderActive && (
+                        <button
+                          onClick={handleCancelSpider}
+                          class="w-full py-1.5 bg-red-600/80 hover:bg-red-600 text-white rounded-lg text-xs font-semibold transition-all active:scale-95 flex items-center justify-center border border-red-500/20 shadow-md"
+                        >
+                          🛑 Cancel Spider Crawl
+                        </button>
+                      )}
+                    </div>
+                  )}
                 </div>
-              </div>
+              )}
 
               {/* Profiles list */}
               <div class="space-y-3 pt-4 border-t border-white/5 flex-1 flex flex-col min-h-[160px]">
