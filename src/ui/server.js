@@ -449,17 +449,20 @@ app.post('/api/spider/cancel', (req, res) => {
 });
 
 // POST kill/shutdown server
-app.post('/api/kill', async (req, res) => {
+app.post('/api/kill', (req, res) => {
   res.json({ success: true, message: 'Server is shutting down...' });
   console.log('🛑 Shutting down server as requested from Web UI...');
-  if (sharedBrowser) {
-    try {
-      await sharedBrowser.close();
-    } catch (e) {}
-  }
+  
+  // Schedule immediate exit in 1 second
   setTimeout(() => {
+    console.log('Exiting process...');
     process.exit(0);
   }, 1000);
+
+  // Close browser in parallel without blocking the exit timeout
+  if (sharedBrowser) {
+    sharedBrowser.close().catch(() => {});
+  }
 });
 
 // Serve frontend files statically
