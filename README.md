@@ -45,6 +45,11 @@ A terminal-first, developer-grade web scraping tool built in Node.js. It extract
    ```bash
    chmod +x src/cli.js
    ```
+3. **Start the Visual Web Console UI**:
+   ```bash
+   node src/ui/server.js
+   ```
+   This boots the server on `http://localhost:3001` and initializes the shared headless browser. Open `http://localhost:3001` in your web browser to access the interactive selector and dashboard.
 
 ---
 
