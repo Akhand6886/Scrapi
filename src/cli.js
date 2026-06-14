@@ -15,7 +15,8 @@ import {
   getScrapeById, 
   saveMarkdownFile,
   getProfileByName,
-  saveJsonFile
+  saveJsonFile,
+  downloadMediaFiles
 } from './storage.js';
 import { extractData, summarizeContent, groupScrapes } from './llm.js';
 import { runSpider } from './spider.js';
@@ -68,6 +69,7 @@ async function performScrape(url, options) {
       timeout: options.timeout ? parseInt(options.timeout, 10) : 10000,
       selector: options.selector,
       images: !!options.images,
+      downloadMedia: !!options.downloadMedia,
       noCache: !!options.noCache
     });
 
@@ -104,6 +106,12 @@ async function performScrape(url, options) {
       });
       dbRecord.filename = filename;
       spinner.succeed(chalk.green(`Scraped successfully! Saved to ${chalk.cyan(filename)}`));
+      
+      if (options.downloadMedia && result.media && result.media.length > 0) {
+        spinner.text = `Downloading ${result.media.length} media files...`;
+        await downloadMediaFiles(result.media, filename, options.output || './output');
+        spinner.succeed(chalk.green(`Downloaded ${result.media.length} media files.`));
+      }
 
       // Perform LLM Structured Data Extraction if requested
       if (options.llm && (options.extract || options.schema)) {
@@ -163,6 +171,7 @@ program
   .option('-f, --filename <name>', 'Custom output filename (no extension)')
   .option('--category <name>', 'Category name to tag scrape and create subfolder')
   .option('--images', 'Include image alt text in output', false)
+  .option('--download-media', 'Download images to local media directory', false)
   .option('--no-meta', 'Skip YAML frontmatter block', false)
   .option('--print', 'Print to terminal, do not save', false)
   .option('--no-db', 'Skip SQLite database insert', false)
@@ -436,6 +445,7 @@ program
   .option('--category <name>', 'Category name to tag scrapes and create subfolder')
   .option('-c, --concurrency <number>', 'Number of parallel scraper workers', '2')
   .option('--images', 'Include image alt text in output', false)
+  .option('--download-media', 'Download images to local media directory', false)
   .option('--no-meta', 'Skip YAML frontmatter block', false)
   .option('--no-db', 'Skip SQLite database insert', false)
   .option('--timeout <ms>', 'Request timeout in milliseconds', '10000')
@@ -538,6 +548,7 @@ program
   .option('--delay <ms>', 'Polite rate-limiting delay between requests in milliseconds', '1500')
   .option('--category <name>', 'Category tag for DB entries (defaults to host name)')
   .option('--images', 'Include image alt text in output', false)
+  .option('--download-media', 'Download images to local media directory', false)
   .option('--no-meta', 'Skip YAML frontmatter block', false)
   .option('--no-db', 'Skip SQLite database insert', false)
   .option('--timeout <ms>', 'Request timeout in milliseconds', '10000')
