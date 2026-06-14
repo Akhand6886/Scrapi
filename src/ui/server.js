@@ -319,7 +319,8 @@ app.get('/api/proxy', async (req, res) => {
 // GET scrapes history
 app.get('/api/scrapes', (req, res) => {
   try {
-    const scrapes = getAllScrapes();
+    const category = req.query.category || null;
+    const scrapes = getAllScrapes(category);
     res.json(scrapes);
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -328,13 +329,13 @@ app.get('/api/scrapes', (req, res) => {
 
 // POST scrape on-demand
 app.post('/api/scrape', async (req, res) => {
-  const { url, selector, images, noMeta } = req.body;
+  const { url, selector, images, noMeta, category } = req.body;
   if (!url) {
     return res.status(400).json({ error: 'Missing url' });
   }
   try {
     const result = await scrapePage(url, { selector, images });
-    const filename = await saveMarkdownFile(result.markdown, result.metadata, { noMeta });
+    const filename = await saveMarkdownFile(result.markdown, result.metadata, { noMeta, category });
     
     const record = {
       url,
@@ -344,8 +345,13 @@ app.post('/api/scrape', async (req, res) => {
       word_count: result.metadata.word_count,
       scraped_at: result.metadata.scraped_at,
       selector: selector || 'auto',
-      status: 'success'
+      status: 'success',
+      category: category || null
     };
+    // Ensure we handle scraped_at safely if undefined
+    if (!record.scraped_at) {
+      record.scraped_at = new Date().toISOString();
+    }
     insertScrape(record);
     res.json({ success: true, filename, markdown: result.markdown });
   } catch (err) {
