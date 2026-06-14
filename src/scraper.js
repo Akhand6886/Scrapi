@@ -4,6 +4,7 @@ import TurndownService from 'turndown';
 import http from 'http';
 import https from 'https';
 import { getCachedPage, saveCachedPage } from './storage.js';
+import path from 'path';
 
 const httpAgent = new http.Agent({ keepAlive: true });
 const httpsAgent = new https.Agent({ keepAlive: true });
@@ -406,6 +407,32 @@ export async function scrapePage(url, options = {}) {
   // Find the content we care about
   const contentRoot = findBestContentRoot($, options.selector);
   
+  const mediaToDownload = [];
+  if (options.downloadMedia) {
+    contentRoot.find('img').each((_, elem) => {
+      let src = $(elem).attr('src');
+      if (src && src.startsWith('http')) {
+        try {
+          const u = new URL(src);
+          let ext = path.extname(u.pathname);
+          if (!ext || ext.length > 5) ext = '.jpg'; // Fallback
+          // Clean base name and truncate if too long
+          let basename = path.basename(u.pathname, ext).replace(/[^a-zA-Z0-9_-]/g, '') || 'image';
+          if (basename.length > 50) basename = basename.substring(0, 50);
+          
+          const filename = `${basename}_${Date.now()}_${Math.floor(Math.random() * 1000)}${ext}`;
+          
+          mediaToDownload.push({ url: src, filename });
+          
+          // Use relative path for Markdown output
+          $(elem).attr('src', `media/${filename}`);
+        } catch (e) {
+          // Ignore invalid URLs
+        }
+      }
+    });
+  }
+  
   // Convert content to Markdown
   const markdown = convertToMarkdown(contentRoot, options);
 
@@ -415,6 +442,7 @@ export async function scrapePage(url, options = {}) {
 
   return {
     metadata,
-    markdown
+    markdown,
+    media: mediaToDownload
   };
 }
