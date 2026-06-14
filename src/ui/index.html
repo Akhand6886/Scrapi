@@ -144,6 +144,7 @@
 
       const [discoveredCategories, setDiscoveredCategories] = useState([]);
       const [syncingCategories, setSyncingCategories] = useState(false);
+      const [autoDetecting, setAutoDetecting] = useState(false);
 
       // Loading/UI states
       const [activeTab, setActiveTab] = useState('iframe'); // 'iframe' | 'markdown'
@@ -577,6 +578,31 @@
         }
       };
 
+      const handleAutoDetectSelector = async () => {
+        if (!url) {
+          showToast('Please enter a Target URL first.', 'error');
+          return;
+        }
+        setAutoDetecting(true);
+        try {
+          const data = await safeFetchJson('/api/auto-selector', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ url })
+          });
+          if (data.selector) {
+            setSelector(data.selector);
+            showToast(`Auto-detected selector: ${data.selector}`, 'success');
+          } else {
+            showToast('Could not automatically determine a dominant link selector.', 'error');
+          }
+        } catch (err) {
+          showToast(err.message, 'error');
+        } finally {
+          setAutoDetecting(false);
+        }
+      };
+
       return (
         <div class="flex-1 flex flex-col h-full overflow-hidden">
           {/* Header */}
@@ -843,6 +869,14 @@
                         onChange={e => setSelector(e.target.value)}
                         class="flex-1 px-3 py-2 bg-dark-950/80 border border-white/10 rounded-lg text-sm text-emerald-400 font-mono focus:outline-none focus:border-blue-500 transition-colors"
                       />
+                      <button 
+                        onClick={handleAutoDetectSelector}
+                        disabled={autoDetecting || !url}
+                        class="px-4 bg-white/5 hover:bg-white/10 disabled:opacity-50 rounded-lg border border-white/10 text-sm font-semibold transition-colors text-purple-400 active:scale-95 whitespace-nowrap"
+                        title="Auto-detect dominant link selector"
+                      >
+                        {autoDetecting ? '🪄 ...' : '🪄 Auto'}
+                      </button>
                     </div>
                   </div>
 
