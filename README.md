@@ -30,6 +30,7 @@ A terminal-first, developer-grade web scraping tool built in Node.js. It extract
 - **Smart Result Caching**: Caches LLM parsing runs based on input SHA-256 hash to prevent redundant paid API calls.
 - **Offline Fallbacks**: Automatically falls back to rule-based heuristic extraction patterns if API keys or endpoints are unavailable.
 - **Auto-Summarization & Batch Grouping**: Multi-page grouping index maps URLs dynamically.
+- **Crawl & Category Scraping**: Discover links on listing/index pages, scrape nested pages concurrently, tag them with database categories, and write files in hierarchical subdirectories (e.g. `./output/<category>/`).
 
 ---
 
@@ -92,6 +93,23 @@ node src/cli.js show <scrape-id>
 ### Re-export past Scrape
 ```bash
 node src/cli.js export <scrape-id> -d ./custom-folder/my-scraped-file.md
+```
+
+### Crawl and Scrape Nested Links
+Extract anchor links matching a CSS selector on an index/list page and scrape them in parallel under a custom category:
+```bash
+node src/cli.js crawl https://news.ycombinator.com -s ".titleline > a" --category TechNews --concurrency 3
+```
+
+### Scrape and Tag with a Category
+Save output in `./output/blog/` and log in SQLite under the category tag:
+```bash
+node src/cli.js scrape https://example.com/blog-post-1 --category blog
+```
+
+### Filter Scrapes List by Category
+```bash
+node src/cli.js list --category TechNews
 ```
 
 ---
