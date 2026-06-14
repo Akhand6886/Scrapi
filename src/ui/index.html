@@ -145,6 +145,7 @@
       const [discoveredCategories, setDiscoveredCategories] = useState([]);
       const [syncingCategories, setSyncingCategories] = useState(false);
       const [autoDetecting, setAutoDetecting] = useState(false);
+      const [confirmKill, setConfirmKill] = useState(false);
 
       // Loading/UI states
       const [activeTab, setActiveTab] = useState('iframe'); // 'iframe' | 'markdown'
@@ -426,9 +427,15 @@
           }
         };
 
-        // Run parallel scraping workers based on user configuration
+        // Run parallel scraping workers based on user configuration, staggered to prevent burst rate-limits
         try {
-          const workers = Array.from({ length: concurrencyVal }, () => runVisualWorker());
+          const workers = Array.from({ length: concurrencyVal }, async (_, idx) => {
+            // Stagger start: wait (idx * delayVal) before the worker begins processing
+            if (idx > 0 && delayVal > 0) {
+              await new Promise(resolve => setTimeout(resolve, idx * delayVal));
+            }
+            return runVisualWorker();
+          });
           await Promise.all(workers);
           showToast(`Live batch scrape completed! ${succeeded} succeeded, ${failed} failed.`, 'success');
           loadData(); // reload scrapes logs history
@@ -532,7 +539,9 @@
 
       // Kill the Express backend
       const handleKillServer = async () => {
-        if (!confirm('Are you sure you want to terminate the scraper backend server? This will shut down the server process.')) {
+        if (!confirmKill) {
+          setConfirmKill(true);
+          setTimeout(() => setConfirmKill(false), 3000);
           return;
         }
         showToast('Shutting down server program...', 'error');
@@ -621,11 +630,11 @@
             <div class="flex items-center space-x-4">
               <button 
                 onClick={handleKillServer}
-                class="px-4 py-2 bg-red-600/80 hover:bg-red-600 text-white rounded-lg text-sm font-semibold transition-all border border-red-500/30 flex items-center shadow-lg hover:shadow-red-600/20 active:scale-95"
+                class={`px-4 py-2 text-white rounded-lg text-sm font-semibold transition-all border flex items-center shadow-lg active:scale-95 ${confirmKill ? 'bg-orange-600 hover:bg-orange-500 border-orange-500/50 shadow-orange-600/20' : 'bg-red-600/80 hover:bg-red-600 border-red-500/30 shadow-red-600/20'}`}
                 title="Shutdown Express Backend Process"
               >
                 <svg class="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M18.364 18.364A9 9 0 005.636 5.636m12.728 12.728A9 9 0 015.636 5.636m12.728 12.728L5.636 5.636"/></svg>
-                Kill Program
+                {confirmKill ? 'Click to Confirm' : 'Kill Program'}
               </button>
             </div>
           </header>
