@@ -346,13 +346,17 @@ app.get('/api/scrapes', (req, res) => {
 
 // POST scrape on-demand
 app.post('/api/scrape', async (req, res) => {
-  const { url, selector, images, noMeta, category } = req.body;
+  const { url, selector, images, downloadMedia, noMeta, category } = req.body;
   if (!url) {
     return res.status(400).json({ error: 'Missing url' });
   }
   try {
-    const result = await scrapePage(url, { selector, images });
+    const result = await scrapePage(url, { selector, images, downloadMedia });
     const filename = await saveMarkdownFile(result.markdown, result.metadata, { noMeta, category });
+    
+    if (downloadMedia && result.media && result.media.length > 0) {
+      await downloadMediaFiles(result.media, filename, './output');
+    }
     
     const record = {
       url,
@@ -378,7 +382,7 @@ app.post('/api/scrape', async (req, res) => {
 
 // POST start website spider
 app.post('/api/spider', async (req, res) => {
-  const { url, depth, maxPages, concurrency, delay, category } = req.body;
+  const { url, depth, maxPages, concurrency, delay, category, downloadMedia } = req.body;
   if (!url) {
     return res.status(400).json({ error: 'Missing url' });
   }
@@ -394,6 +398,7 @@ app.post('/api/spider', async (req, res) => {
     concurrency: concurrency !== undefined ? parseInt(concurrency, 10) : 2,
     delay: delay !== undefined ? parseInt(delay, 10) : 1500,
     category: category || hostName,
+    downloadMedia: !!downloadMedia,
     aborted: false
   };
 
