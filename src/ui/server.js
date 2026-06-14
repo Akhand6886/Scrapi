@@ -17,9 +17,6 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-// Initialize SQLite database
-initStorage();
-
 // Shared long-lived headless browser instance to reduce CPU and memory usage
 let sharedBrowser = null;
 let idleTimer = null;
@@ -394,13 +391,18 @@ process.on('SIGTERM', async () => {
 });
 
 const PORT = process.env.PORT || 3001;
-app.listen(PORT, async () => {
-  console.log(`🚀 Scrapi Local Server running on http://localhost:${PORT}`);
-  // Warm up the browser background-wise
-  try {
-    await getSharedBrowser();
-    console.log('🌐 Shared headless browser instance warmed up and ready.');
-  } catch (e) {
-    console.error('⚠️ Failed to pre-warm headless browser:', e.message);
-  }
+initStorage().then(() => {
+  app.listen(PORT, async () => {
+    console.log(`🚀 Scrapi Local Server running on http://localhost:${PORT}`);
+    // Warm up the browser background-wise
+    try {
+      await getSharedBrowser();
+      console.log('🌐 Shared headless browser instance warmed up and ready.');
+    } catch (e) {
+      console.error('⚠️ Failed to pre-warm headless browser:', e.message);
+    }
+  });
+}).catch(err => {
+  console.error('❌ Failed to initialize SQLite storage:', err.message);
+  process.exit(1);
 });
