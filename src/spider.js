@@ -67,7 +67,7 @@ export async function runSpider(seedUrl, options = {}, onProgress = () => {}) {
 
   const worker = async () => {
     activeWorkers++;
-    while (queue.length > 0 && visited.size < maxPages && !aborted) {
+    while (queue.length > 0 && visited.size < maxPages && !options.aborted) {
       const item = queue.shift();
       if (!item) continue;
 
@@ -183,7 +183,7 @@ export async function runSpider(seedUrl, options = {}, onProgress = () => {}) {
         }
       });
 
-      if (queue.length > 0 && !aborted && delay > 0) {
+      if (queue.length > 0 && !options.aborted && delay > 0) {
         await new Promise(resolve => setTimeout(resolve, delay));
       }
     }
