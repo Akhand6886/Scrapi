@@ -24,6 +24,10 @@ A terminal-first, developer-grade web scraping tool built in Node.js. It extract
 - **Dual-Mode Hybrid Proxy**: Static render mode via Axios for instant preview frames (<100ms), falling back to Playwright only for dynamic/JS rendering.
 - **Lag-Free Visual Selection**: 50ms debounced pointer events and caching on target DOM trees to avoid visual picker reflow lag.
 - **Visual Scraping Profiles**: Save config as a named profile to SQLite, and execute it from terminal: `scrape --profile <name> <url>`.
+- **Batch Scraping Enhancements**: 
+  - **Category Sync**: Automatically discover and sync navigation categories from any target website into 1-click batch scrapers.
+  - **Auto-Detect Link Selector**: One-click "🪄 Auto" heuristic scanner that mathematically determines the CSS selector for the dominant article/post feed on a page.
+- **Media Downloading**: Automatically extract `<img>` tags, download assets locally into a `media/` subdirectory, and rewrite markdown paths to support full offline viewing.
 
 ### Phase 3: LLM Intelligence (Complete)
 - **Structured JSON Extraction**: Convert Markdown to schema-validated JSON using Anthropic Claude or Local LLM.
@@ -73,6 +77,12 @@ node src/cli.js scrape https://news.ycombinator.com -s "table.itemlist" -f hn-ho
 ### Scrape with Image Alt-Text Enabled
 ```bash
 node src/cli.js scrape https://example.com --images
+```
+
+### Scrape and Download Local Media Copies
+Automatically download images into a `./output/media/` folder and rewrite markdown paths:
+```bash
+node src/cli.js scrape https://example.com --images --download-media
 ```
 
 ### Run Batch Scrapes
