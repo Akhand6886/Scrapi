@@ -65,5 +65,16 @@ node src/cli.js list --category TechNews
 The Visual Web Console integrates these capabilities dynamically:
 
 1. **Category Tagging**: A new **Category** text input field is provided under the targeting pane. Tagging works for both standard individual pages and batch inputs.
-2. **Batch Link Discovery Scrapes**: When a selector is extracted from the web view, you can click **Discover Links**. Once links are resolved, click **Start Live Batch Scrape** to watch parallel progress in real-time.
-3. **Category Filtering**: An interactive text input **Filter by Category** allows you to search and filter sqlite records matching specific categories on the fly, rendering corresponding category badges.
+2. **Category Sync & Discovery**: The **Batch Scraping** mode now features a "Sync Categories" button. Providing a site's base URL and clicking sync will automatically heuristically discover the site's top-level navigation categories and provide 1-click preset buttons that autofill the Target URL and Category fields.
+3. **Auto-Detect Link Selector**: In **Batch Scraping** mode, users no longer need to manually inspect the DOM to find CSS selectors. Clicking the "🪄 Auto" button executes a backend structural clustering analysis that automatically identifies the most statistically significant grouping of links on the page (typically the article/feed list) and populates the selector field.
+4. **Batch Link Discovery Scrapes**: When a selector is extracted from the web view (or Auto-Detected), you can click **Discover Links**. Once links are resolved, click **Start Live Batch Scrape** to watch parallel progress in real-time.
+5. **Category Filtering**: An interactive text input **Filter by Category** allows you to search and filter sqlite records matching specific categories on the fly, rendering corresponding category badges.
+
+---
+
+## 🖼️ Media Management
+
+When Scraping or Batch-Scraping categories, users can optionally toggle **Download Media**.
+- The backend parses all extracted `<img>` assets and downloads them asynchronously.
+- Downloaded assets are kept inside a `media/` subdirectory created explicitly next to where the final Markdown file is saved (e.g. `./output/<category>/media/image-name.jpg`).
+- The generated markdown file automatically rewrites absolute image URL paths to relative local paths pointing to the `media/` directory, allowing for full offline viewing.
