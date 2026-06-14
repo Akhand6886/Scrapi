@@ -538,3 +538,82 @@ export async function discoverCategories(url) {
 
   return categories;
 }
+
+/**
+ * Heuristically auto-detects the CSS selector for the main article/post links on a page.
+ * @param {string} url 
+ * @returns {Promise<string|null>}
+ */
+export async function autoDetectLinkSelector(url) {
+  const html = await fetchHtml(url);
+  const $ = cheerio.load(html);
+  
+  let origin;
+  try {
+    origin = new URL(url).origin;
+  } catch (e) {
+    return null;
+  }
+
+  // Remove common noise areas to focus on main content links
+  $('nav, header, footer, aside, .sidebar, .widget, .comments').remove();
+
+  const signatureCounts = new Map();
+
+  $('a').each((_, elem) => {
+    const el = $(elem);
+    const href = el.attr('href');
+    if (!href) return;
+
+    try {
+      if (href.startsWith('#') || href.startsWith('javascript:') || href.startsWith('mailto:')) return;
+      const absoluteUrl = new URL(href, url).href;
+      
+      // Must be same origin
+      if (new URL(absoluteUrl).origin !== origin) return;
+      
+      // Ignore pagination/category links if possible
+      if (absoluteUrl.includes('/category/') || absoluteUrl.includes('/page/') || absoluteUrl.includes('/tag/')) return;
+
+      const aClasses = (el.attr('class') || '').trim().split(/\s+/).filter(c => c && /^[a-zA-Z0-9_-]+$/.test(c)).slice(0, 2).join('.');
+      
+      const parent = el.parent();
+      const parentTag = parent.get(0) ? parent.get(0).tagName : '';
+      if (!parentTag || parentTag === 'body' || parentTag === 'html') return;
+
+      const parentClasses = (parent.attr('class') || '').trim().split(/\s+/).filter(c => c && /^[a-zA-Z0-9_-]+$/.test(c)).slice(0, 2).join('.');
+
+      let selector = '';
+      if (parentTag) {
+        selector += parentTag.toLowerCase();
+        if (parentClasses) selector += `.${parentClasses}`;
+        selector += ' > ';
+      }
+      selector += 'a';
+      if (aClasses) selector += `.${aClasses}`;
+
+      if (!signatureCounts.has(selector)) {
+        signatureCounts.set(selector, 0);
+      }
+      signatureCounts.set(selector, signatureCounts.get(selector) + 1);
+    } catch (e) {}
+  });
+
+  if (signatureCounts.size === 0) return null;
+
+  // Find the signature with the most occurrences (likely the list of posts)
+  let bestSelector = null;
+  let maxCount = 0;
+
+  for (const [selector, count] of signatureCounts.entries()) {
+    if (count > maxCount) {
+      maxCount = count;
+      bestSelector = selector;
+    }
+  }
+
+  // If the best selector only appeared once, it's not a list
+  if (maxCount < 2) return null;
+
+  return bestSelector;
+}
