@@ -43,6 +43,7 @@ async function performScrape(url, options) {
     scraped_at: new Date().toISOString(),
     status: 'failed',
     selector: options.selector || 'auto',
+    category: options.category || null,
   };
 
   try {
@@ -97,7 +98,8 @@ async function performScrape(url, options) {
       filename = await saveMarkdownFile(finalMarkdown, result.metadata, {
         output: options.output,
         filename: filename,
-        noMeta: options.noMeta
+        noMeta: options.noMeta,
+        category: options.category
       });
       dbRecord.filename = filename;
       spinner.succeed(chalk.green(`Scraped successfully! Saved to ${chalk.cyan(filename)}`));
@@ -113,7 +115,10 @@ async function performScrape(url, options) {
           
           // Save JSON output if requested
           if (options.outputJson) {
-            const jsonFilename = await saveJsonFile(jsonData, filename, { output: options.output });
+            const jsonFilename = await saveJsonFile(jsonData, filename, { 
+              output: options.output,
+              category: options.category
+            });
             console.log(chalk.green(`✓ Saved structured data to ${chalk.cyan(jsonFilename)}`));
           } else {
             console.log(chalk.bold.cyan('\nExtracted JSON:'));
@@ -155,6 +160,7 @@ program
   .option('-o, --output <dir>', 'Directory to save Markdown files', './output')
   .option('-s, --selector <css>', 'CSS selector to target specific content area', 'auto')
   .option('-f, --filename <name>', 'Custom output filename (no extension)')
+  .option('--category <name>', 'Category name to tag scrape and create subfolder')
   .option('--images', 'Include image alt text in output', false)
   .option('--no-meta', 'Skip YAML frontmatter block', false)
   .option('--print', 'Print to terminal, do not save', false)
@@ -179,6 +185,7 @@ program
   .description('Scrape all URLs listed in a .txt file (one per line)')
   .option('-o, --output <dir>', 'Directory to save Markdown files', './output')
   .option('-s, --selector <css>', 'CSS selector to target specific content area', 'auto')
+  .option('--category <name>', 'Category name to tag scrapes and create subfolder')
   .option('--images', 'Include image alt text in output', false)
   .option('--no-meta', 'Skip YAML frontmatter block', false)
   .option('--no-db', 'Skip SQLite database insert', false)
@@ -274,24 +281,26 @@ program
 program
   .command('list')
   .description('Show all past scrapes from the SQLite DB')
-  .action(async () => {
+  .option('--category <name>', 'Filter history by category name')
+  .action(async (options) => {
     await initStorage();
     try {
-      const scrapes = getAllScrapes();
+      const scrapes = getAllScrapes(options.category);
       if (scrapes.length === 0) {
         console.log(chalk.yellow('No scrapes recorded in database.'));
         return;
       }
       
       console.log(chalk.bold.cyan('\nPast Scrapes:'));
-      console.log(chalk.bold('ID  | Status  | Word Count | Scraped At           | URL'));
-      console.log('----------------------------------------------------------------------');
+      console.log(chalk.bold('ID  | Status  | Word Count | Scraped At           | Category   | URL'));
+      console.log('-----------------------------------------------------------------------------------------');
       scrapes.forEach(s => {
         const idStr = String(s.id).padEnd(3);
         const statusStr = s.status === 'success' ? chalk.green('SUCCESS') : chalk.red('FAILED ');
         const countStr = String(s.word_count || 0).padStart(10);
         const dateStr = s.scraped_at.substring(0, 19).replace('T', ' ');
-        console.log(`${idStr} | ${statusStr} | ${countStr} | ${dateStr} | ${s.url}`);
+        const catStr = String(s.category || '').padEnd(10);
+        console.log(`${idStr} | ${statusStr} | ${countStr} | ${dateStr} | ${catStr} | ${s.url}`);
       });
       console.log('');
     } catch (err) {
@@ -412,6 +421,104 @@ program
         await fs.writeFile(options.output, fileContent, 'utf-8');
         console.log(chalk.green(`✓ Successfully saved links list to ${chalk.cyan(options.output)}`));
       }
+    } catch (err) {
+      handleError(err, spinner);
+    }
+  });
+
+// Crawl command
+program
+  .command('crawl <url>')
+  .description('Crawl a list/index page, discover nested links, and scrape them concurrently under a category')
+  .requiredOption('-s, --selector <css>', 'CSS selector targeting anchor links on list page')
+  .option('-o, --output <dir>', 'Directory to save Markdown files', './output')
+  .option('--category <name>', 'Category name to tag scrapes and create subfolder')
+  .option('-c, --concurrency <number>', 'Number of parallel scraper workers', '2')
+  .option('--images', 'Include image alt text in output', false)
+  .option('--no-meta', 'Skip YAML frontmatter block', false)
+  .option('--no-db', 'Skip SQLite database insert', false)
+  .option('--timeout <ms>', 'Request timeout in milliseconds', '10000')
+  .option('--profile <name>', 'Use saved visual scraper profile name')
+  // LLM options
+  .option('--llm', 'Enable LLM processing after scrape', false)
+  .option('--extract <instruction>', 'Plain-English extraction instruction')
+  .option('--summarize', 'Auto-summarize the scraped content', false)
+  .option('--schema <name>', 'Use Zod schema (article, product, event, contact)', 'custom')
+  .option('--output-json', 'Save structured JSON alongside Markdown', false)
+  .option('--no-cache', 'Bypass HTTP cache and force fresh request', false)
+  .action(async (url, options) => {
+    await initStorage(undefined, options.output);
+    const spinner = ora(`Fetching list page: ${chalk.cyan(url)}...`).start();
+    try {
+      const html = await fetchHtml(url, { noCache: !!options.noCache });
+      spinner.text = 'Discovering links on list page...';
+      
+      const $ = cheerio.load(html);
+      const discoveredUrls = new Set();
+      
+      $(options.selector).each((_, elem) => {
+        let href = $(elem).attr('href');
+        if (!href) {
+          const parentAnchor = $(elem).closest('a');
+          if (parentAnchor.length > 0) {
+            href = parentAnchor.attr('href');
+          }
+        }
+        
+        if (href) {
+          try {
+            if (href.startsWith('#') || href.startsWith('mailto:') || href.startsWith('tel:') || href.startsWith('javascript:')) {
+              return;
+            }
+            const absoluteUrl = new URL(href, url).href;
+            discoveredUrls.add(absoluteUrl);
+          } catch (e) {
+            // Skip parse errors
+          }
+        }
+      });
+      
+      const urls = Array.from(discoveredUrls);
+      if (urls.length === 0) {
+        spinner.fail(chalk.yellow('No links found matching list page selector.'));
+        return;
+      }
+      
+      const concurrency = Math.max(1, parseInt(options.concurrency, 10) || 2);
+      spinner.succeed(`Discovered ${chalk.green(urls.length)} links. Starting concurrent scrapes (Concurrency: ${concurrency}).`);
+      
+      const successfullyScraped = [];
+      const queue = [...urls];
+      let urlIndex = 0;
+
+      // When crawling subpages, options.selector target was for list page, so default to 'auto' for nested pages
+      const scrapeOptions = {
+        ...options,
+        selector: 'auto'
+      };
+
+      const runWorker = async () => {
+        while (queue.length > 0) {
+          const targetUrl = queue.shift();
+          const currentIdx = ++urlIndex;
+          console.log(chalk.gray(`\n[Worker] [${currentIdx}/${urls.length}] Crawling subpage: ${targetUrl}`));
+          
+          const res = await performScrape(targetUrl, scrapeOptions);
+          if (res) {
+            successfullyScraped.push(res);
+          }
+          
+          // Polite delay
+          if (queue.length > 0) {
+            await new Promise(resolve => setTimeout(resolve, 1500));
+          }
+        }
+      };
+
+      const workers = Array.from({ length: Math.min(concurrency, urls.length) }, () => runWorker());
+      await Promise.all(workers);
+      
+      console.log(chalk.bold.green(`\n✓ Crawl completed! Successfully scraped ${successfullyScraped.length}/${urls.length} pages.`));
     } catch (err) {
       handleError(err, spinner);
     }
