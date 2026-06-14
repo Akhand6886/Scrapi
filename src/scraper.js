@@ -446,3 +446,95 @@ export async function scrapePage(url, options = {}) {
     media: mediaToDownload
   };
 }
+
+/**
+ * Discovers category navigation links on a given URL.
+ * @param {string} url 
+ * @returns {Promise<Array<{url: string, name: string}>>}
+ */
+export async function discoverCategories(url) {
+  const html = await fetchHtml(url);
+  const $ = cheerio.load(html);
+  
+  let origin;
+  try {
+    origin = new URL(url).origin;
+  } catch (e) {
+    return [];
+  }
+
+  const categoryMap = new Map();
+
+  // Target common navigation structures
+  $('nav a, .menu a, #menu a, header a, .categories a, footer a').each((_, elem) => {
+    const el = $(elem);
+    let href = el.attr('href');
+    let name = el.text().trim();
+    
+    if (!href || !name || name.length < 2 || name.length > 30) return;
+    
+    // Ignore images inside a tags if no text
+    if (!name) return;
+
+    try {
+      if (href.startsWith('#') || href.startsWith('mailto:') || href.startsWith('tel:') || href.startsWith('javascript:')) {
+        return;
+      }
+      const absoluteUrl = new URL(href, url).href;
+      
+      // Only keep same-origin
+      if (new URL(absoluteUrl).origin !== origin) return;
+      
+      // Remove trailing slash for deduplication
+      const cleanUrl = absoluteUrl.replace(/\/$/, '');
+      
+      // Filter out common non-categories
+      const lowerUrl = cleanUrl.toLowerCase();
+      if (
+        lowerUrl.includes('/login') || 
+        lowerUrl.includes('/about') || 
+        lowerUrl.includes('/contact') || 
+        lowerUrl.includes('/terms') || 
+        lowerUrl.includes('/privacy') ||
+        lowerUrl.includes('/author/')
+      ) {
+        return;
+      }
+
+      if (!categoryMap.has(cleanUrl)) {
+        categoryMap.set(cleanUrl, name);
+      }
+    } catch (e) {}
+  });
+
+  const categories = Array.from(categoryMap.entries()).map(([href, name]) => ({
+    url: href,
+    name
+  }));
+
+  // If we found very few from navigation, maybe we fall back to all links that have "category" in path?
+  if (categories.length < 2) {
+    $('a').each((_, elem) => {
+      const el = $(elem);
+      let href = el.attr('href');
+      let name = el.text().trim();
+      if (!href || !name) return;
+      try {
+        const absoluteUrl = new URL(href, url).href;
+        if (new URL(absoluteUrl).origin !== origin) return;
+        if (absoluteUrl.includes('/category/') || absoluteUrl.includes('/tag/')) {
+          const cleanUrl = absoluteUrl.replace(/\/$/, '');
+          if (!categoryMap.has(cleanUrl)) {
+            categoryMap.set(cleanUrl, name);
+          }
+        }
+      } catch (e) {}
+    });
+    return Array.from(categoryMap.entries()).map(([href, name]) => ({
+      url: href,
+      name
+    }));
+  }
+
+  return categories;
+}
