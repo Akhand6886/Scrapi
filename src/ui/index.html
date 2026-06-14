@@ -73,6 +73,46 @@
   <script type="text/babel">
     const { useState, useEffect, useRef } = React;
 
+    // Helper function to safely fetch JSON and validate content-type and ok status
+    async function safeFetchJson(url, options = {}) {
+      const res = await fetch(url, options);
+      
+      const contentType = res.headers.get('content-type') || '';
+      const isJson = contentType.includes('application/json');
+
+      if (!res.ok) {
+        let errorMsg = `HTTP Error ${res.status}`;
+        if (isJson) {
+          try {
+            const data = await res.json();
+            errorMsg = data.error || errorMsg;
+          } catch (e) {}
+        } else {
+          try {
+            const text = await res.text();
+            if (text.includes('<!DOCTYPE html>') || text.includes('<html')) {
+              errorMsg = `Server returned HTML instead of JSON. Ensure you are accessing the app at http://localhost:3001/`;
+            } else {
+              errorMsg = text.substring(0, 100) || errorMsg;
+            }
+          } catch (e) {}
+        }
+        throw new Error(errorMsg);
+      }
+
+      if (!isJson) {
+        try {
+          const text = await res.text();
+          if (text.includes('<!DOCTYPE html>') || text.includes('<html')) {
+            throw new Error('Server returned HTML instead of JSON. Please open http://localhost:3001/ in your browser.');
+          }
+        } catch (e) {}
+        throw new Error(`Expected JSON but got content-type "${contentType}"`);
+      }
+
+      return res.json();
+    }
+
     function App() {
       // Inputs
       const [url, setUrl] = useState('');
@@ -122,28 +162,15 @@
       const loadData = async (catFilter = categoryFilter) => {
         try {
           const urlParams = catFilter ? `?category=${encodeURIComponent(catFilter)}` : '';
-          const [profRes, histRes] = await Promise.all([
-            fetch('/api/profiles'),
-            fetch(`/api/scrapes${urlParams}`)
+          const [profData, histData] = await Promise.all([
+            safeFetchJson('/api/profiles'),
+            safeFetchJson(`/api/scrapes${urlParams}`)
           ]);
-
-          if (!profRes.ok || !histRes.ok) {
-            throw new Error(`API status errors: ${profRes.status} / ${histRes.status}`);
-          }
-
-          const profContentType = profRes.headers.get('content-type') || '';
-          const histContentType = histRes.headers.get('content-type') || '';
-
-          if (!profContentType.includes('application/json') || !histContentType.includes('application/json')) {
-            showToast('Visual Console loaded outside port 3001. Please open http://localhost:3001/ in your browser.', 'error');
-            return;
-          }
-
-          setProfiles(await profRes.json());
-          setHistory(await histRes.json());
+          setProfiles(profData);
+          setHistory(histData);
         } catch (err) {
           console.error("Failed to fetch initial data", err);
-          showToast(`Connection error: Make sure server.js is running and you are accessing http://localhost:3001/`, 'error');
+          showToast(`Connection error: Make sure server.js is running and you are accessing http://localhost:3001/ (${err.message})`, 'error');
         }
       };
 
@@ -151,15 +178,16 @@
         loadData();
 
         // Check active spider status on boot
-        fetch('/api/spider')
-          .then(res => res.json())
+        safeFetchJson('/api/spider')
           .then(data => {
             if (data.running) {
               setSpiderActive(true);
               setSpiderStats(data.stats || { visited: 0, queued: 0, succeeded: 0, failed: 0 });
               setSpiderLogs(data.logs || []);
             }
-          }).catch(err => console.error(err));
+          }).catch(err => {
+            console.error("Failed to fetch active spider status on boot:", err);
+          });
 
         // Listen for selector clicked or navigation in iframe proxy
         const handleIframeMessage = (event) => {
@@ -200,16 +228,13 @@
         if (spiderActive) {
           timer = setInterval(async () => {
             try {
-              const res = await fetch('/api/spider');
-              if (res.ok) {
-                const data = await res.json();
-                setSpiderStats(data.stats || { visited: 0, queued: 0, succeeded: 0, failed: 0 });
-                setSpiderLogs(data.logs || []);
-                if (!data.running) {
-                  setSpiderActive(false);
-                  showToast('Spider crawling finished!', 'success');
-                  loadData(); // reload history
-                }
+              const data = await safeFetchJson('/api/spider');
+              setSpiderStats(data.stats || { visited: 0, queued: 0, succeeded: 0, failed: 0 });
+              setSpiderLogs(data.logs || []);
+              if (!data.running) {
+                setSpiderActive(false);
+                showToast('Spider crawling finished!', 'success');
+                loadData(); // reload history
               }
             } catch (err) {
               console.error(err);
@@ -230,7 +255,7 @@
         setSpiderLogs(['[System] Requesting spider startup...']);
         
         try {
-          const res = await fetch('/api/spider', {
+          await safeFetchJson('/api/spider', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
@@ -242,14 +267,7 @@
               category: category.trim() || null
             })
           });
-          
-          if (!res.ok) {
-            const data = await res.json();
-            showToast(data.error || 'Failed to start spider.', 'error');
-            setSpiderActive(false);
-          } else {
-            showToast('Spider crawl started!', 'success');
-          }
+          showToast('Spider crawl started!', 'success');
         } catch (err) {
           showToast(err.message, 'error');
           setSpiderActive(false);
@@ -258,13 +276,8 @@
 
       const handleCancelSpider = async () => {
         try {
-          const res = await fetch('/api/spider/cancel', { method: 'POST' });
-          if (res.ok) {
-            showToast('Crawl cancel signal sent.', 'info');
-          } else {
-            const data = await res.json();
-            showToast(data.error || 'Failed to cancel crawl.', 'error');
-          }
+          await safeFetchJson('/api/spider/cancel', { method: 'POST' });
+          showToast('Crawl cancel signal sent.', 'info');
         } catch (err) {
           showToast(err.message, 'error');
         }
@@ -290,7 +303,7 @@
         }
         setLoading(true);
         try {
-          const res = await fetch('/api/scrape', {
+          const data = await safeFetchJson('/api/scrape', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
@@ -302,15 +315,10 @@
             })
           });
 
-          const data = await res.json();
-          if (res.ok) {
-            setMarkdownOutput(data.markdown);
-            setActiveTab('markdown');
-            showToast(`Scrape completed! Saved to ${data.filename}`, 'success');
-            loadData(); // reload history
-          } else {
-            showToast(data.error || 'Failed to complete scrape.', 'error');
-          }
+          setMarkdownOutput(data.markdown);
+          setActiveTab('markdown');
+          showToast(`Scrape completed! Saved to ${data.filename}`, 'success');
+          loadData(); // reload history
         } catch (err) {
           showToast(err.message, 'error');
         } finally {
@@ -332,7 +340,7 @@
         setDiscovering(true);
         setDiscoveredUrls([]);
         try {
-          const res = await fetch('/api/discover', {
+          const data = await safeFetchJson('/api/discover', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
@@ -341,13 +349,8 @@
               mode: renderMode
             })
           });
-          const data = await res.json();
-          if (res.ok) {
-            setDiscoveredUrls(data.urls || []);
-            showToast(`Discovered ${data.urls ? data.urls.length : 0} links!`, 'success');
-          } else {
-            showToast(data.error || 'Failed to discover links.', 'error');
-          }
+          setDiscoveredUrls(data.urls || []);
+          showToast(`Discovered ${data.urls ? data.urls.length : 0} links!`, 'success');
         } catch (err) {
           showToast(err.message, 'error');
         } finally {
@@ -385,7 +388,7 @@
             }));
 
             try {
-              const res = await fetch('/api/scrape', {
+              await safeFetchJson('/api/scrape', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
@@ -396,13 +399,8 @@
                   category: category.trim() || null
                 })
               });
-              if (res.ok) {
-                succeeded++;
-                setBatchProgress(prev => ({ ...prev, succeeded }));
-              } else {
-                failed++;
-                setBatchProgress(prev => ({ ...prev, failed }));
-              }
+              succeeded++;
+              setBatchProgress(prev => ({ ...prev, succeeded }));
             } catch (err) {
               failed++;
               setBatchProgress(prev => ({ ...prev, failed }));
@@ -448,7 +446,7 @@
         };
 
         try {
-          const res = await fetch('/api/profiles', {
+          await safeFetchJson('/api/profiles', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
@@ -458,15 +456,10 @@
             })
           });
 
-          if (res.ok) {
-            showToast(`Profile "${profileName}" saved successfully!`, 'success');
-            setProfileName('');
-            setActiveSignature(null);
-            loadData(); // reload profiles list
-          } else {
-            const data = await res.json();
-            showToast(data.error || 'Failed to save profile.', 'error');
-          }
+          showToast(`Profile "${profileName}" saved successfully!`, 'success');
+          setProfileName('');
+          setActiveSignature(null);
+          loadData(); // reload profiles list
         } catch (err) {
           showToast(err.message, 'error');
         }
@@ -491,7 +484,7 @@
       const handleViewScrape = async (scrape) => {
         setLoading(true);
         try {
-          const res = await fetch(`/api/preview`, {
+          const data = await safeFetchJson(`/api/preview`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
@@ -499,16 +492,11 @@
               selector: scrape.selector
             })
           });
-          const data = await res.json();
-          if (res.ok) {
-            setMarkdownOutput(data.markdown);
-            setActiveTab('markdown');
-            setUrl(scrape.url);
-            setSelector(scrape.selector || 'auto');
-            showToast(`Loaded Scrape ID #${scrape.id}`, 'success');
-          } else {
-            showToast(data.error || 'Failed to preview scrape content.', 'error');
-          }
+          setMarkdownOutput(data.markdown);
+          setActiveTab('markdown');
+          setUrl(scrape.url);
+          setSelector(scrape.selector || 'auto');
+          showToast(`Loaded Scrape ID #${scrape.id}`, 'success');
         } catch (err) {
           showToast(err.message, 'error');
         } finally {
