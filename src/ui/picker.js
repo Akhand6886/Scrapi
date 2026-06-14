@@ -61,7 +61,7 @@
       if (classAttr && typeof classAttr === 'string') {
         const classes = classAttr.trim()
           .split(/\s+/)
-          .filter(c => c && !c.startsWith('scrapi-') && !c.includes(':') && !c.includes('['));
+          .filter(c => c && !c.startsWith('scrapi-') && /^[a-zA-Z0-9_-]+$/.test(c));
         if (classes.length > 0) {
           selector += '.' + classes[0]; // Minimal selector: use first class
         }
@@ -183,7 +183,7 @@
     const selector = generateCssSelector(target);
 
     const classAttr = target.getAttribute('class') || '';
-    const classesList = classAttr.trim().split(/\s+/).filter(c => c && !c.startsWith('scrapi-'));
+    const classesList = classAttr.trim().split(/\s+/).filter(c => c && !c.startsWith('scrapi-') && /^[a-zA-Z0-9_-]+$/.test(c));
 
     // Send selector details to parent window (React UI)
     window.parent.postMessage({
