@@ -364,6 +364,7 @@ program
   .option('-o, --output <file>', 'Save discovered URLs list to a text file (one per line)')
   .option('--no-cache', 'Bypass HTTP cache and force fresh request', false)
   .action(async (url, options) => {
+    await initStorage();
     const spinner = ora(`Fetching page: ${chalk.cyan(url)}...`).start();
     try {
       const html = await fetchHtml(url, { noCache: !!options.noCache });
