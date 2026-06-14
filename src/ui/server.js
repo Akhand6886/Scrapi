@@ -8,7 +8,7 @@ import path from 'path';
 import fs from 'fs/promises';
 import { fileURLToPath } from 'url';
 import { initStorage, getAllProfiles, saveProfile, getAllScrapes, insertScrape, saveMarkdownFile } from '../storage.js';
-import { scrapePage, discoverCategories } from '../scraper.js';
+import { scrapePage, discoverCategories, autoDetectLinkSelector } from '../scraper.js';
 import { runSpider } from '../spider.js';
 
 const __filename = fileURLToPath(import.meta.url);
