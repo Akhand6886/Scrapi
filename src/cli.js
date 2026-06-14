@@ -18,6 +18,7 @@ import {
   saveJsonFile
 } from './storage.js';
 import { extractData, summarizeContent, groupScrapes } from './llm.js';
+import { runSpider } from './spider.js';
 
 const program = new Command();
 
@@ -519,6 +520,54 @@ program
       await Promise.all(workers);
       
       console.log(chalk.bold.green(`\n✓ Crawl completed! Successfully scraped ${successfullyScraped.length}/${urls.length} pages.`));
+    } catch (err) {
+      handleError(err, spinner);
+    }
+  });
+
+// Spider command
+program
+  .command('spider <url>')
+  .description('Recursively crawl and scrape an entire website under the same origin')
+  .option('-o, --output <dir>', 'Directory to save Markdown files', './output')
+  .option('-c, --concurrency <number>', 'Number of parallel scraper workers', '2')
+  .option('-d, --depth <number>', 'Maximum link crawling depth', 'Infinity')
+  .option('-m, --max-pages <number>', 'Maximum page scraping budget limit', '100')
+  .option('--delay <ms>', 'Polite rate-limiting delay between requests in milliseconds', '1500')
+  .option('--category <name>', 'Category tag for DB entries (defaults to host name)')
+  .option('--images', 'Include image alt text in output', false)
+  .option('--no-meta', 'Skip YAML frontmatter block', false)
+  .option('--no-db', 'Skip SQLite database insert', false)
+  .option('--timeout <ms>', 'Request timeout in milliseconds', '10000')
+  .option('--no-cache', 'Bypass HTTP cache and force fresh request', false)
+  .action(async (url, options) => {
+    await initStorage(undefined, options.output);
+    const hostName = new URL(url).hostname;
+    const spiderOptions = {
+      ...options,
+      depth: options.depth === 'Infinity' ? Infinity : parseInt(options.depth, 10),
+      maxPages: parseInt(options.maxPages, 10),
+      concurrency: parseInt(options.concurrency, 10),
+      delay: parseInt(options.delay, 10),
+      category: options.category || hostName
+    };
+
+    const spinner = ora(`Initializing Spider on ${chalk.cyan(url)}...`).start();
+
+    try {
+      spinner.stop();
+      console.log(chalk.bold.cyan('\n🕸️ Starting recursive site crawl...'));
+      
+      const stats = await runSpider(url, spiderOptions, (evt) => {
+        if (evt.type === 'log') {
+          console.log(chalk.gray(evt.message));
+        }
+      });
+
+      console.log(chalk.bold.green(`\n✓ Crawl completed successfully!`));
+      console.log(chalk.cyan(`   Total Visited Pages:  ${stats.visited}`));
+      console.log(chalk.green(`   Successful Scrapes:   ${stats.succeeded}`));
+      console.log(chalk.red(`   Failed/Error Pages:   ${stats.failed}\n`));
     } catch (err) {
       handleError(err, spinner);
     }
