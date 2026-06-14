@@ -1,7 +1,7 @@
 import * as cheerio from 'cheerio';
 import path from 'path';
 import { fetchHtml, scrapePage } from './scraper.js';
-import { saveMarkdownFile, insertScrape } from './storage.js';
+import { saveMarkdownFile, insertScrape, downloadMediaFiles } from './storage.js';
 
 /**
  * Runs a recursive site spider that crawls page links in parallel, mapping directory structures.
@@ -91,6 +91,7 @@ export async function runSpider(seedUrl, options = {}, onProgress = () => {}) {
         // Scrape target page content
         const result = await scrapePage(targetUrl, {
           images: !!options.images,
+          downloadMedia: !!options.downloadMedia,
           noCache: !!options.noCache,
           timeout: options.timeout ? parseInt(options.timeout, 10) : 10000
         });
@@ -124,6 +125,11 @@ export async function runSpider(seedUrl, options = {}, onProgress = () => {}) {
           filename: uniqueBaseName,
           noMeta: !!options.noMeta
         });
+        
+        if (options.downloadMedia && result.media && result.media.length > 0) {
+          logMessage(`Downloading ${result.media.length} media files...`);
+          await downloadMediaFiles(result.media, finalFilename, outputDir);
+        }
 
         dbRecord.title = result.metadata.title;
         dbRecord.description = result.metadata.description;
