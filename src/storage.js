@@ -61,6 +61,9 @@ export async function initStorage(dbDir = './data', outputDir = './output') {
       result TEXT,
       cached_at DATETIME NOT NULL
     );
+
+    CREATE INDEX IF NOT EXISTS idx_scrapes_category ON scrapes(category);
+    CREATE INDEX IF NOT EXISTS idx_scrapes_scraped_at ON scrapes(scraped_at DESC);
   `);
 
   // Migration: Add category column if it does not exist in scrapes table
