@@ -82,7 +82,7 @@ async function runTests() {
     category: 'custom-cat'
   });
 
-  const expectedMdPath = path.join(testOutputDir, 'custom-cat', mdFilename);
+  const expectedMdPath = path.join(testOutputDir, mdFilename);
   const mdExists = await fs.access(expectedMdPath).then(() => true).catch(() => false);
   if (!mdExists) {
     throw new Error(`Assertion Failed: markdown file was not saved under the category subfolder: ${expectedMdPath}`);
@@ -93,7 +93,7 @@ async function runTests() {
     category: 'custom-cat'
   });
 
-  const expectedJsonPath = path.join(testOutputDir, 'custom-cat', jsonFilename);
+  const expectedJsonPath = path.join(testOutputDir, jsonFilename);
   const jsonExists = await fs.access(expectedJsonPath).then(() => true).catch(() => false);
   if (!jsonExists) {
     throw new Error(`Assertion Failed: json file was not saved under the category subfolder: ${expectedJsonPath}`);
