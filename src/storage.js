@@ -34,7 +34,8 @@ export async function initStorage(dbDir = './data', outputDir = './output') {
       error TEXT,
       profile_id INTEGER,
       llm_processed BOOLEAN DEFAULT 0,
-      schema_used TEXT
+      schema_used TEXT,
+      category TEXT
     );
 
     CREATE TABLE IF NOT EXISTS profiles (
@@ -61,6 +62,13 @@ export async function initStorage(dbDir = './data', outputDir = './output') {
       cached_at DATETIME NOT NULL
     );
   `);
+
+  // Migration: Add category column if it does not exist in scrapes table
+  try {
+    db.prepare('SELECT category FROM scrapes LIMIT 1').get();
+  } catch (e) {
+    db.exec('ALTER TABLE scrapes ADD COLUMN category TEXT');
+  }
 }
 
 /**
@@ -71,7 +79,10 @@ export async function initStorage(dbDir = './data', outputDir = './output') {
  * @returns {Promise<string>} File path where saved
  */
 export async function saveMarkdownFile(markdown, metadata, options = {}) {
-  const outputDir = options.output || './output';
+  let outputDir = options.output || './output';
+  if (options.category) {
+    outputDir = path.join(outputDir, options.category);
+  }
   await fs.mkdir(outputDir, { recursive: true });
 
   // Generate safe filename if not custom provided
@@ -121,7 +132,10 @@ export async function saveMarkdownFile(markdown, metadata, options = {}) {
  * @param {object} options 
  */
 export async function saveJsonFile(jsonData, filename, options = {}) {
-  const outputDir = options.output || './output';
+  let outputDir = options.output || './output';
+  if (options.category) {
+    outputDir = path.join(outputDir, options.category);
+  }
   await fs.mkdir(outputDir, { recursive: true });
 
   const jsonFilename = filename.replace(/\.md$/, '.json');
@@ -140,11 +154,11 @@ export function insertScrape(record) {
     INSERT INTO scrapes (
       url, title, description, filename, word_count, 
       scraped_at, selector, status, error, profile_id,
-      llm_processed, schema_used
+      llm_processed, schema_used, category
     ) VALUES (
       ?, ?, ?, ?, ?, 
       ?, ?, ?, ?, ?,
-      ?, ?
+      ?, ?, ?
     )
   `);
 
@@ -160,7 +174,8 @@ export function insertScrape(record) {
     record.error || null,
     record.profile_id || null,
     record.llm_processed ? 1 : 0,
-    record.schema_used || null
+    record.schema_used || null,
+    record.category || null
   );
 
   return info.lastInsertRowid;
@@ -184,7 +199,13 @@ export function markScrapeLlmProcessed(scrapeId, schemaUsed) {
  * Retrieves list of all scrapes.
  * @returns {Array}
  */
-export function getAllScrapes() {
+export function getAllScrapes(categoryFilter = null) {
+  if (categoryFilter) {
+    const stmt = db.prepare(`
+      SELECT * FROM scrapes WHERE category = ? ORDER BY scraped_at DESC
+    `);
+    return stmt.all(categoryFilter);
+  }
   const stmt = db.prepare(`
     SELECT * FROM scrapes ORDER BY scraped_at DESC
   `);
