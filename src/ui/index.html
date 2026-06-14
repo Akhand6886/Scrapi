@@ -864,6 +864,15 @@
                     <label class="flex items-center text-xs text-gray-400 cursor-pointer">
                       <input 
                         type="checkbox" 
+                        checked={downloadMedia} 
+                        onChange={e => setDownloadMedia(e.target.checked)}
+                        class="rounded bg-dark-950 border-white/10 text-blue-500 mr-2 focus:ring-0 focus:ring-offset-0"
+                      />
+                      Download Media
+                    </label>
+                    <label class="flex items-center text-xs text-gray-400 cursor-pointer">
+                      <input 
+                        type="checkbox" 
                         checked={noMeta} 
                         onChange={e => setNoMeta(e.target.checked)}
                         class="rounded bg-dark-950 border-white/10 text-blue-500 mr-2 focus:ring-0 focus:ring-offset-0"
@@ -940,6 +949,37 @@
                         class="w-full px-2.5 py-1.5 bg-dark-950/80 border border-white/10 rounded-lg text-xs text-gray-200 focus:outline-none focus:border-blue-500"
                       />
                     </div>
+                  </div>
+
+                  {/* Settings Checkboxes */}
+                  <div class="flex items-center space-x-6 pt-1 border-t border-white/5">
+                    <label class="flex items-center text-xs text-gray-400 cursor-pointer">
+                      <input 
+                        type="checkbox" 
+                        checked={includeImages} 
+                        onChange={e => setIncludeImages(e.target.checked)}
+                        class="rounded bg-dark-950 border-white/10 text-blue-500 mr-2 focus:ring-0 focus:ring-offset-0"
+                      />
+                      Include Images
+                    </label>
+                    <label class="flex items-center text-xs text-gray-400 cursor-pointer">
+                      <input 
+                        type="checkbox" 
+                        checked={downloadMedia} 
+                        onChange={e => setDownloadMedia(e.target.checked)}
+                        class="rounded bg-dark-950 border-white/10 text-blue-500 mr-2 focus:ring-0 focus:ring-offset-0"
+                      />
+                      Download Media
+                    </label>
+                    <label class="flex items-center text-xs text-gray-400 cursor-pointer">
+                      <input 
+                        type="checkbox" 
+                        checked={noMeta} 
+                        onChange={e => setNoMeta(e.target.checked)}
+                        class="rounded bg-dark-950 border-white/10 text-blue-500 mr-2 focus:ring-0 focus:ring-offset-0"
+                      />
+                      Skip Meta
+                    </label>
                   </div>
 
                   <button 
