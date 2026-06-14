@@ -138,6 +138,8 @@
       const [discoveredUrls, setDiscoveredUrls] = useState([]);
       const [discovering, setDiscovering] = useState(false);
       const [batchProgress, setBatchProgress] = useState(null); // { active: false, current: 0, total: 0, succeeded: 0, failed: 0 }
+      const [batchConcurrency, setBatchConcurrency] = useState(2);
+      const [batchDelay, setBatchDelay] = useState(1500);
 
       // Loading/UI states
       const [activeTab, setActiveTab] = useState('iframe'); // 'iframe' | 'markdown'
@@ -358,7 +360,7 @@
         }
       };
 
-      // Run live batch scrape with parallel concurrency of 2 in frontend
+      // Run live batch scrape with parallel concurrency and rate-limiting delays
       const handleStartBatchScrape = async () => {
         if (discoveredUrls.length === 0) return;
         
@@ -376,6 +378,9 @@
         let currentIdx = 0;
         let succeeded = 0;
         let failed = 0;
+
+        const concurrencyVal = Math.max(1, parseInt(batchConcurrency, 10) || 2);
+        const delayVal = Math.max(0, parseInt(batchDelay, 10) || 0);
 
         const runVisualWorker = async () => {
           while (urlsQueue.length > 0) {
@@ -405,12 +410,18 @@
               failed++;
               setBatchProgress(prev => ({ ...prev, failed }));
             }
+
+            // Polite delay in worker loop between fetches
+            if (urlsQueue.length > 0 && delayVal > 0) {
+              await new Promise(resolve => setTimeout(resolve, delayVal));
+            }
           }
         };
 
-        // Run 2 parallel scraping workers
+        // Run parallel scraping workers based on user configuration
         try {
-          await Promise.all([runVisualWorker(), runVisualWorker()]);
+          const workers = Array.from({ length: concurrencyVal }, () => runVisualWorker());
+          await Promise.all(workers);
           showToast(`Live batch scrape completed! ${succeeded} succeeded, ${failed} failed.`, 'success');
           loadData(); // reload scrapes logs history
         } catch (e) {
@@ -762,6 +773,27 @@
                         value={selector} 
                         onChange={e => setSelector(e.target.value)}
                         class="flex-1 px-3 py-2 bg-dark-950/80 border border-white/10 rounded-lg text-sm text-emerald-400 font-mono focus:outline-none focus:border-blue-500 transition-colors"
+                      />
+                    </div>
+                  </div>
+
+                  <div class="grid grid-cols-2 gap-2">
+                    <div class="space-y-1">
+                      <label class="text-[10px] text-gray-400 font-medium">Concurrency</label>
+                      <input 
+                        type="number" 
+                        value={batchConcurrency} 
+                        onChange={e => setBatchConcurrency(e.target.value)}
+                        class="w-full px-2.5 py-1.5 bg-dark-950/80 border border-white/10 rounded-lg text-xs text-gray-200 focus:outline-none focus:border-blue-500"
+                      />
+                    </div>
+                    <div class="space-y-1">
+                      <label class="text-[10px] text-gray-400 font-medium">Delay (ms)</label>
+                      <input 
+                        type="number" 
+                        value={batchDelay} 
+                        onChange={e => setBatchDelay(e.target.value)}
+                        class="w-full px-2.5 py-1.5 bg-dark-950/80 border border-white/10 rounded-lg text-xs text-gray-200 focus:outline-none focus:border-blue-500"
                       />
                     </div>
                   </div>

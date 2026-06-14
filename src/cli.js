@@ -440,6 +440,7 @@ program
   .option('--no-db', 'Skip SQLite database insert', false)
   .option('--timeout <ms>', 'Request timeout in milliseconds', '10000')
   .option('--profile <name>', 'Use saved visual scraper profile name')
+  .option('--delay <ms>', 'Polite rate-limiting delay between requests in milliseconds', '1500')
   // LLM options
   .option('--llm', 'Enable LLM processing after scrape', false)
   .option('--extract <instruction>', 'Plain-English extraction instruction')
@@ -510,8 +511,9 @@ program
           }
           
           // Polite delay
-          if (queue.length > 0) {
-            await new Promise(resolve => setTimeout(resolve, 1500));
+          const delayVal = options.delay !== undefined ? parseInt(options.delay, 10) : 1500;
+          if (queue.length > 0 && delayVal > 0) {
+            await new Promise(resolve => setTimeout(resolve, delayVal));
           }
         }
       };
