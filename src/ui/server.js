@@ -358,6 +358,20 @@ app.post('/api/categories', async (req, res) => {
   }
 });
 
+// POST auto detect link selector for a URL
+app.post('/api/auto-selector', async (req, res) => {
+  const { url } = req.body;
+  if (!url) {
+    return res.status(400).json({ error: 'Missing url' });
+  }
+  try {
+    const selector = await autoDetectLinkSelector(url);
+    res.json({ selector });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // POST scrape on-demand
 app.post('/api/scrape', async (req, res) => {
   const { url, selector, images, downloadMedia, noMeta, category } = req.body;
