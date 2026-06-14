@@ -2,6 +2,7 @@ import fs from 'fs/promises';
 import path from 'path';
 import Database from 'better-sqlite3';
 import zlib from 'zlib';
+import axios from 'axios';
 
 let db;
 
@@ -361,4 +362,38 @@ export function saveLlmCache(hash, schemaName, instruction, result) {
       cached_at = excluded.cached_at
   `);
   stmt.run(hash, schemaName, instruction || '', JSON.stringify(result), new Date().toISOString());
+}
+
+/**
+ * Downloads media files to a local directory based on the markdown file's path.
+ * @param {Array<{url: string, filename: string}>} mediaList 
+ * @param {string} markdownFilePath 
+ * @param {string} baseOutputDir 
+ */
+export async function downloadMediaFiles(mediaList, markdownFilePath, baseOutputDir = './output') {
+  if (!mediaList || mediaList.length === 0) return;
+  
+  // markdownFilePath is relative to baseOutputDir or absolute.
+  const absoluteMarkdownDir = path.resolve(baseOutputDir, path.dirname(markdownFilePath));
+  const mediaDir = path.join(absoluteMarkdownDir, 'media');
+  
+  await fs.mkdir(mediaDir, { recursive: true });
+  
+  const downloadPromises = mediaList.map(async (media) => {
+    try {
+      const response = await axios.get(media.url, {
+        responseType: 'arraybuffer',
+        timeout: 15000,
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+        }
+      });
+      const filePath = path.join(mediaDir, media.filename);
+      await fs.writeFile(filePath, response.data);
+    } catch (err) {
+      console.error(`Failed to download media ${media.url}:`, err.message);
+    }
+  });
+  
+  await Promise.allSettled(downloadPromises);
 }
