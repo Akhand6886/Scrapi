@@ -6,7 +6,8 @@
   "main": "src/cli.js",
   "scripts": {
     "start": "node src/cli.js",
-    "test": "node test.js"
+    "test": "node test.js",
+    "build:ui": "esbuild src/ui/app.jsx --bundle --outfile=src/ui/app.js --loader:.js=jsx --jsx-factory=React.createElement --jsx-fragment=React.Fragment --minify"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.104.1",
