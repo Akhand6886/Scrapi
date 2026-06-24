@@ -1,0 +1,1271 @@
+const { useState, useEffect, useRef } = React;
+
+    // Helper function to safely fetch JSON and validate content-type and ok status
+    async function safeFetchJson(url, options = {}) {
+      const res = await fetch(url, options);
+      
+      const contentType = res.headers.get('content-type') || '';
+      const isJson = contentType.includes('application/json');
+
+      if (!res.ok) {
+        let errorMsg = `HTTP Error ${res.status}`;
+        if (isJson) {
+          try {
+            const data = await res.json();
+            errorMsg = data.error || errorMsg;
+          } catch (e) {}
+        } else {
+          try {
+            const text = await res.text();
+            if (text.includes('<!DOCTYPE html>') || text.includes('<html')) {
+              errorMsg = `Server returned HTML instead of JSON. Ensure you are accessing the app at http://localhost:3001/`;
+            } else {
+              errorMsg = text.substring(0, 100) || errorMsg;
+            }
+          } catch (e) {}
+        }
+        throw new Error(errorMsg);
+      }
+
+      if (!isJson) {
+        try {
+          const text = await res.text();
+          if (text.includes('<!DOCTYPE html>') || text.includes('<html')) {
+            throw new Error('Server returned HTML instead of JSON. Please open http://localhost:3001/ in your browser.');
+          }
+        } catch (e) {}
+        throw new Error(`Expected JSON but got content-type "${contentType}"`);
+      }
+
+      return res.json();
+    }
+
+    function App() {
+      // Inputs
+      const [url, setUrl] = useState('');
+      const [category, setCategory] = useState('');
+      const [categoryFilter, setCategoryFilter] = useState('');
+      const [selector, setSelector] = useState('');
+      const [activeSignature, setActiveSignature] = useState(null);
+      const [profileName, setProfileName] = useState('');
+      const [includeImages, setIncludeImages] = useState(false);
+      const [downloadMedia, setDownloadMedia] = useState(false);
+      const [noMeta, setNoMeta] = useState(false);
+      const [renderMode, setRenderMode] = useState('static'); // 'static' | 'dynamic'
+
+      // Console mode & Spider state
+      const [consoleMode, setConsoleMode] = useState('single'); // 'single' | 'batch' | 'spider'
+      const [spiderActive, setSpiderActive] = useState(false);
+      const [spiderStats, setSpiderStats] = useState({ visited: 0, queued: 0, succeeded: 0, failed: 0 });
+      const [spiderLogs, setSpiderLogs] = useState([]);
+      const [spiderDepth, setSpiderDepth] = useState('Infinity');
+      const [spiderMaxPages, setSpiderMaxPages] = useState(100);
+      const [spiderConcurrency, setSpiderConcurrency] = useState(2);
+      const [spiderDelay, setSpiderDelay] = useState(1500);
+
+      const [discoveredUrls, setDiscoveredUrls] = useState([]);
+      const [discovering, setDiscovering] = useState(false);
+      const [batchProgress, setBatchProgress] = useState(null); // { active: false, current: 0, total: 0, succeeded: 0, failed: 0 }
+      const [batchConcurrency, setBatchConcurrency] = useState(2);
+      const [batchDelay, setBatchDelay] = useState(1500);
+
+      const [discoveredCategories, setDiscoveredCategories] = useState([]);
+      const [syncingCategories, setSyncingCategories] = useState(false);
+      const [autoDetecting, setAutoDetecting] = useState(false);
+      const [confirmKill, setConfirmKill] = useState(false);
+
+      // Loading/UI states
+      const [activeTab, setActiveTab] = useState('iframe'); // 'iframe' | 'markdown'
+      const [iframeUrl, setIframeUrl] = useState('');
+      const [markdownOutput, setMarkdownOutput] = useState('');
+      const [loading, setLoading] = useState(false);
+      const [statusMsg, setStatusMsg] = useState({ text: '', type: '' }); // type: 'success' | 'error' | 'info'
+      
+      // Loaded data lists
+      const [profiles, setProfiles] = useState([]);
+      const [history, setHistory] = useState([]);
+
+      const iframeRef = useRef(null);
+
+      // Show toast message helper
+      const showToast = (text, type = 'info') => {
+        setStatusMsg({ text, type });
+        setTimeout(() => setStatusMsg({ text: '', type: '' }), 4000);
+      };
+
+      // Load initial history & profiles
+      const loadData = async (catFilter = categoryFilter) => {
+        try {
+          const urlParams = catFilter ? `?category=${encodeURIComponent(catFilter)}` : '';
+          const [profData, histData] = await Promise.all([
+            safeFetchJson('/api/profiles'),
+            safeFetchJson(`/api/scrapes${urlParams}`)
+          ]);
+          setProfiles(profData);
+          setHistory(histData);
+        } catch (err) {
+          console.error("Failed to fetch initial data", err);
+          showToast(`Connection error: Make sure server.js is running and you are accessing http://localhost:3001/ (${err.message})`, 'error');
+        }
+      };
+
+      useEffect(() => {
+        loadData();
+
+        // Check active spider status on boot
+        safeFetchJson('/api/spider')
+          .then(data => {
+            if (data.running) {
+              setSpiderActive(true);
+              setSpiderStats(data.stats || { visited: 0, queued: 0, succeeded: 0, failed: 0 });
+              setSpiderLogs(data.logs || []);
+            }
+          }).catch(err => {
+            console.error("Failed to fetch active spider status on boot:", err);
+          });
+
+        // Listen for selector clicked or navigation in iframe proxy
+        const handleIframeMessage = (event) => {
+          if (event.data) {
+            if (event.data.type === 'ELEMENT_SELECTED') {
+              const { selector: sel, tagName, textSnippet, classes, parentTagName } = event.data;
+              setSelector(sel);
+              setActiveSignature({
+                content: sel,
+                tagName,
+                textSnippet,
+                classes,
+                parentTagName
+              });
+              showToast(`Selected ${tagName.toUpperCase()}: "${textSnippet.substring(0, 30)}..."`, 'success');
+            } else if (event.data.type === 'NAVIGATE_TO_URL') {
+              const targetUrl = event.data.url;
+              setUrl(targetUrl);
+              setIframeUrl(`/api/proxy?url=${encodeURIComponent(targetUrl)}&mode=${renderMode}`);
+              setLoading(true);
+              try {
+                const urlObj = new URL(targetUrl);
+                showToast(`Navigating to ${urlObj.pathname || '/'}...`, 'info');
+              } catch (e) {
+                showToast(`Navigating...`, 'info');
+              }
+            }
+          }
+        };
+
+        window.addEventListener('message', handleIframeMessage);
+        return () => window.removeEventListener('message', handleIframeMessage);
+      }, []);
+
+      // Spider status polling effect
+      useEffect(() => {
+        let timer = null;
+        if (spiderActive) {
+          timer = setInterval(async () => {
+            try {
+              const data = await safeFetchJson('/api/spider');
+              setSpiderStats(data.stats || { visited: 0, queued: 0, succeeded: 0, failed: 0 });
+              setSpiderLogs(data.logs || []);
+              if (!data.running) {
+                setSpiderActive(false);
+                showToast('Spider crawling finished!', 'success');
+                loadData(); // reload history
+              }
+            } catch (err) {
+              console.error(err);
+            }
+          }, 1000);
+        }
+        return () => {
+          if (timer) clearInterval(timer);
+        };
+      }, [spiderActive]);
+
+      const handleStartSpider = async () => {
+        if (!url) {
+          showToast('Please enter a target URL first.', 'error');
+          return;
+        }
+        setSpiderActive(true);
+        setSpiderLogs(['[System] Requesting spider startup...']);
+        
+        try {
+          await safeFetchJson('/api/spider', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              url,
+              depth: spiderDepth === 'Infinity' ? 'Infinity' : parseInt(spiderDepth, 10),
+              maxPages: parseInt(spiderMaxPages, 10),
+              concurrency: parseInt(spiderConcurrency, 10),
+              delay: parseInt(spiderDelay, 10),
+              category: category.trim() || null,
+              downloadMedia
+            })
+          });
+          showToast('Spider crawl started!', 'success');
+        } catch (err) {
+          showToast(err.message, 'error');
+          setSpiderActive(false);
+        }
+      };
+
+      const handleCancelSpider = async () => {
+        try {
+          await safeFetchJson('/api/spider/cancel', { method: 'POST' });
+          showToast('Crawl cancel signal sent.', 'info');
+        } catch (err) {
+          showToast(err.message, 'error');
+        }
+      };
+
+      // Trigger proxy page render
+      const handleLoadProxy = () => {
+        if (!url) {
+          showToast('Please enter a target URL first.', 'error');
+          return;
+        }
+        setLoading(true);
+        setActiveTab('iframe');
+        setIframeUrl(`/api/proxy?url=${encodeURIComponent(url)}&mode=${renderMode}`);
+        // The iframe onload handler will turn off the spinner
+      };
+
+      // Run on-demand scrape
+      const handleScrape = async () => {
+        if (!url) {
+          showToast('Please enter a target URL first.', 'error');
+          return;
+        }
+        setLoading(true);
+        try {
+          const data = await safeFetchJson('/api/scrape', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              url,
+              selector: selector || 'auto',
+              images: includeImages,
+              downloadMedia,
+              noMeta,
+              category: category.trim() || null
+            })
+          });
+
+          setMarkdownOutput(data.markdown);
+          setActiveTab('markdown');
+          showToast(`Scrape completed! Saved to ${data.filename}`, 'success');
+          loadData(); // reload history
+        } catch (err) {
+          showToast(err.message, 'error');
+        } finally {
+          setLoading(false);
+        }
+      };
+
+      // Discover links on target page matching selector
+      const handleDiscoverLinks = async () => {
+        if (!url) {
+          showToast('Please enter a target URL first.', 'error');
+          return;
+        }
+        if (!selector) {
+          showToast('Please select an anchor link first by clicking on it.', 'error');
+          return;
+        }
+        
+        setDiscovering(true);
+        setDiscoveredUrls([]);
+        try {
+          const data = await safeFetchJson('/api/discover', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              url,
+              selector,
+              mode: renderMode
+            })
+          });
+          setDiscoveredUrls(data.urls || []);
+          showToast(`Discovered ${data.urls ? data.urls.length : 0} links!`, 'success');
+        } catch (err) {
+          showToast(err.message, 'error');
+        } finally {
+          setDiscovering(false);
+        }
+      };
+
+      // Run live batch scrape with parallel concurrency and rate-limiting delays
+      const handleStartBatchScrape = async () => {
+        if (discoveredUrls.length === 0) return;
+        
+        const total = discoveredUrls.length;
+        setBatchProgress({
+          active: true,
+          current: 0,
+          total: total,
+          succeeded: 0,
+          failed: 0
+        });
+        setLoading(true);
+
+        const urlsQueue = [...discoveredUrls];
+        let currentIdx = 0;
+        let succeeded = 0;
+        let failed = 0;
+
+        const concurrencyVal = Math.max(1, parseInt(batchConcurrency, 10) || 2);
+        const delayVal = Math.max(0, parseInt(batchDelay, 10) || 0);
+
+        const runVisualWorker = async () => {
+          while (urlsQueue.length > 0) {
+            const targetUrl = urlsQueue.shift();
+            currentIdx++;
+            
+            setBatchProgress(prev => ({
+              ...prev,
+              current: currentIdx
+            }));
+
+            try {
+              await safeFetchJson('/api/scrape', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  url: targetUrl,
+                  selector: 'auto', // use auto-detector for final body extraction on subpages
+                  images: includeImages,
+                  downloadMedia,
+                  noMeta: noMeta,
+                  category: category.trim() || null
+                })
+              });
+              succeeded++;
+              setBatchProgress(prev => ({ ...prev, succeeded }));
+            } catch (err) {
+              failed++;
+              setBatchProgress(prev => ({ ...prev, failed }));
+            }
+
+            // Polite delay in worker loop between fetches
+            if (urlsQueue.length > 0 && delayVal > 0) {
+              await new Promise(resolve => setTimeout(resolve, delayVal));
+            }
+          }
+        };
+
+        // Run parallel scraping workers based on user configuration, staggered to prevent burst rate-limits
+        try {
+          const workers = Array.from({ length: concurrencyVal }, async (_, idx) => {
+            // Stagger start: wait (idx * delayVal) before the worker begins processing
+            if (idx > 0 && delayVal > 0) {
+              await new Promise(resolve => setTimeout(resolve, idx * delayVal));
+            }
+            return runVisualWorker();
+          });
+          await Promise.all(workers);
+          showToast(`Live batch scrape completed! ${succeeded} succeeded, ${failed} failed.`, 'success');
+          loadData(); // reload scrapes logs history
+        } catch (e) {
+          showToast('Live batch scrape completed with errors.', 'error');
+        } finally {
+          setLoading(false);
+          setBatchProgress(null);
+        }
+      };
+
+      // Save selector profile
+      const handleSaveProfile = async () => {
+        if (!url) {
+          showToast('A target URL is required to extract a pattern.', 'error');
+          return;
+        }
+        if (!profileName) {
+          showToast('Please specify a name for this profile.', 'error');
+          return;
+        }
+        if (!selector) {
+          showToast('No element selected. Click on the preview to choose a target.', 'error');
+          return;
+        }
+
+        // Build self-healing selector signature
+        const finalSignature = activeSignature && activeSignature.content === selector ? activeSignature : {
+          content: selector,
+          tagName: '*',
+          textSnippet: '',
+          classes: [],
+          parentTagName: null
+        };
+
+        try {
+          await safeFetchJson('/api/profiles', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              name: profileName,
+              urlPattern: url,
+              selectors: finalSignature
+            })
+          });
+
+          showToast(`Profile "${profileName}" saved successfully!`, 'success');
+          setProfileName('');
+          setActiveSignature(null);
+          loadData(); // reload profiles list
+        } catch (err) {
+          showToast(err.message, 'error');
+        }
+      };
+
+      // Apply saved profile settings
+      const handleApplyProfile = (prof) => {
+        setUrl(prof.url_pattern);
+        if (prof.selectors) {
+          if (typeof prof.selectors === 'object') {
+            setSelector(prof.selectors.content || 'auto');
+            setActiveSignature(prof.selectors);
+          } else {
+            setSelector(prof.selectors);
+            setActiveSignature({ content: prof.selectors });
+          }
+        }
+        showToast(`Profile "${prof.name}" settings applied!`, 'success');
+      };
+
+      // Load scrape content from history list
+      const handleViewScrape = async (scrape) => {
+        setLoading(true);
+        try {
+          const data = await safeFetchJson(`/api/preview`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              url: scrape.url,
+              selector: scrape.selector
+            })
+          });
+          setMarkdownOutput(data.markdown);
+          setActiveTab('markdown');
+          setUrl(scrape.url);
+          setSelector(scrape.selector || 'auto');
+          showToast(`Loaded Scrape ID #${scrape.id}`, 'success');
+        } catch (err) {
+          showToast(err.message, 'error');
+        } finally {
+          setLoading(false);
+        }
+      };
+
+      // Copy markdown to clipboard
+      const handleCopyMarkdown = () => {
+        if (!markdownOutput) return;
+        navigator.clipboard.writeText(markdownOutput);
+        showToast('Markdown content copied to clipboard!', 'success');
+      };
+
+      // Kill the Express backend
+      const handleKillServer = async () => {
+        if (!confirmKill) {
+          setConfirmKill(true);
+          setTimeout(() => setConfirmKill(false), 3000);
+          return;
+        }
+        showToast('Shutting down server program...', 'error');
+        try {
+          await fetch('/api/kill', { method: 'POST' });
+        } catch (e) {
+          // fetch will fail since server shuts down
+        }
+        setTimeout(() => {
+          document.body.innerHTML = `
+            <div class="h-screen w-screen flex flex-col items-center justify-center bg-dark-950 text-white font-sans">
+              <span class="text-6xl mb-4">🛑</span>
+              <h1 class="text-3xl font-bold text-red-500 mb-2">Program Terminated</h1>
+              <p class="text-gray-400">The Express backend server process has exited successfully.</p>
+            </div>
+          `;
+        }, 1200);
+      };
+
+      const handleSyncCategories = async () => {
+        if (!url) {
+          showToast('Please enter a Target URL first to sync categories.', 'error');
+          return;
+        }
+        setSyncingCategories(true);
+        setDiscoveredCategories([]);
+        try {
+          const data = await safeFetchJson('/api/categories', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ url })
+          });
+          if (data.categories && data.categories.length > 0) {
+            setDiscoveredCategories(data.categories);
+            showToast(`Found ${data.categories.length} categories!`, 'success');
+          } else {
+            showToast('No categories found on this page.', 'error');
+          }
+        } catch (err) {
+          showToast(err.message, 'error');
+        } finally {
+          setSyncingCategories(false);
+        }
+      };
+
+      const handleAutoDetectSelector = async () => {
+        if (!url) {
+          showToast('Please enter a Target URL first.', 'error');
+          return;
+        }
+        setAutoDetecting(true);
+        try {
+          const data = await safeFetchJson('/api/auto-selector', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ url })
+          });
+          if (data.selector) {
+            setSelector(data.selector);
+            showToast(`Auto-detected selector: ${data.selector}`, 'success');
+          } else {
+            showToast('Could not automatically determine a dominant link selector.', 'error');
+          }
+        } catch (err) {
+          showToast(err.message, 'error');
+        } finally {
+          setAutoDetecting(false);
+        }
+      };
+
+      return (
+        <div class="flex-1 flex flex-col h-full overflow-hidden">
+          {/* Header */}
+          <header class="glass h-16 flex items-center justify-between px-6 border-b border-white/5 shrink-0 z-10">
+            <div class="flex items-center space-x-3">
+              <span class="text-2xl animate-pulse-slow">🕷️</span>
+              <span class="font-bold text-lg tracking-wider text-transparent bg-clip-text bg-gradient-to-r from-blue-400 to-emerald-400">
+                SCRAPI WEB CONSOLE
+              </span>
+              <span class="px-2 py-0.5 bg-emerald-500/10 text-emerald-400 text-xs rounded-full border border-emerald-500/20 font-semibold flex items-center">
+                <span class="h-1.5 w-1.5 rounded-full bg-emerald-400 mr-1.5 animate-pulse"></span>
+                ACTIVE
+              </span>
+            </div>
+
+            <div class="flex items-center space-x-4">
+              <button 
+                onClick={handleKillServer}
+                class={`px-4 py-2 text-white rounded-lg text-sm font-semibold transition-all border flex items-center shadow-lg active:scale-95 ${confirmKill ? 'bg-orange-600 hover:bg-orange-500 border-orange-500/50 shadow-orange-600/20' : 'bg-red-600/80 hover:bg-red-600 border-red-500/30 shadow-red-600/20'}`}
+                title="Shutdown Express Backend Process"
+              >
+                <svg class="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M18.364 18.364A9 9 0 005.636 5.636m12.728 12.728A9 9 0 015.636 5.636m12.728 12.728L5.636 5.636"/></svg>
+                {confirmKill ? 'Click to Confirm' : 'Kill Program'}
+              </button>
+            </div>
+          </header>
+
+          {/* Main Workspace Layout */}
+          <main class="flex-1 flex overflow-hidden">
+            {/* Left Control Panel */}
+            <section class="w-96 flex flex-col border-r border-white/5 glass overflow-y-auto custom-scrollbar p-6 space-y-6 shrink-0">
+              
+              {/* Console Mode switcher */}
+              <div class="space-y-1.5 shrink-0">
+                <label class="text-[10px] text-gray-500 uppercase tracking-widest font-bold">Console Mode</label>
+                <div class="flex bg-dark-950/60 rounded-lg p-1 border border-white/10">
+                  <button
+                    onClick={() => setConsoleMode('single')}
+                    class={`flex-1 py-1.5 text-[11px] font-bold rounded transition-all ${consoleMode === 'single' ? 'bg-blue-600 text-white shadow' : 'text-gray-400 hover:text-gray-200'}`}
+                  >
+                    🕷️ Single
+                  </button>
+                  <button
+                    onClick={() => setConsoleMode('batch')}
+                    class={`flex-1 py-1.5 text-[11px] font-bold rounded transition-all ${consoleMode === 'batch' ? 'bg-blue-600 text-white shadow' : 'text-gray-400 hover:text-gray-200'}`}
+                  >
+                    ⚡ Batch
+                  </button>
+                  <button
+                    onClick={() => setConsoleMode('spider')}
+                    class={`flex-1 py-1.5 text-[11px] font-bold rounded transition-all ${consoleMode === 'spider' ? 'bg-blue-600 text-white shadow' : 'text-gray-400 hover:text-gray-200'}`}
+                  >
+                    🕸️ Spider
+                  </button>
+                </div>
+              </div>
+
+              {consoleMode === 'single' && (
+                <div class="space-y-4 animate-fade-in">
+                  <h2 class="text-sm font-bold tracking-wider text-gray-400 uppercase">1. Targeting</h2>
+                  
+                  <div class="space-y-2">
+                    <label class="text-xs text-gray-400 font-medium">Target URL</label>
+                    <input 
+                      type="url" 
+                      placeholder="https://example.com/item" 
+                      value={url} 
+                      onChange={e => setUrl(e.target.value)}
+                      class="w-full px-3 py-2 bg-dark-950/80 border border-white/10 rounded-lg text-sm text-gray-200 placeholder-gray-500 focus:outline-none focus:border-blue-500 transition-colors"
+                    />
+                  </div>
+
+                  <div class="space-y-2">
+                    <label class="text-xs text-gray-400 font-medium">Category</label>
+                    <input 
+                      type="text" 
+                      placeholder="e.g. blog, news (optional)" 
+                      value={category} 
+                      onChange={e => setCategory(e.target.value)}
+                      class="w-full px-3 py-2 bg-dark-950/80 border border-white/10 rounded-lg text-sm text-gray-200 placeholder-gray-500 focus:outline-none focus:border-blue-500 transition-colors"
+                    />
+                  </div>
+
+                  {/* Render Mode Toggle */}
+                  <div class="space-y-1.5">
+                    <label class="text-xs text-gray-400 font-medium">Render Mode</label>
+                    <div class="flex bg-dark-950/60 rounded-lg p-1 border border-white/10">
+                      <button
+                        onClick={() => setRenderMode('static')}
+                        class={`flex-1 py-1 text-xs font-semibold rounded transition-all ${renderMode === 'static' ? 'bg-blue-600 text-white shadow' : 'text-gray-400 hover:text-gray-200'}`}
+                        title="Load fast static HTML via Axios (lightweight, minimal CPU/RAM)"
+                      >
+                        ⚡ Static (Fast)
+                      </button>
+                      <button
+                        onClick={() => setRenderMode('dynamic')}
+                        class={`flex-1 py-1 text-xs font-semibold rounded transition-all ${renderMode === 'dynamic' ? 'bg-blue-600 text-white shadow' : 'text-gray-400 hover:text-gray-200'}`}
+                        title="Load dynamic SPA via Playwright browser (requires Chromium backend)"
+                      >
+                        🌐 Dynamic (JS)
+                      </button>
+                    </div>
+                  </div>
+
+                  <div class="flex space-x-2">
+                    <button 
+                      onClick={handleLoadProxy} 
+                      disabled={loading}
+                      class="flex-1 py-2 bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white rounded-lg text-sm font-semibold transition-all active:scale-95 flex items-center justify-center"
+                    >
+                      <svg class="w-4 h-4 mr-1.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"/></svg>
+                      Proxy Page
+                    </button>
+                    <button 
+                      onClick={handleScrape} 
+                      disabled={loading}
+                      class="flex-1 py-2 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white rounded-lg text-sm font-semibold transition-all active:scale-95 flex items-center justify-center"
+                    >
+                      <svg class="w-4 h-4 mr-1.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/></svg>
+                      Scrape Now
+                    </button>
+                  </div>
+
+                  {/* Card: Visual Selector Extraction */}
+                  <div class="space-y-4 pt-4 border-t border-white/5">
+                    <h2 class="text-sm font-bold tracking-wider text-gray-400 uppercase">2. Selector & Profile</h2>
+                    
+                    <div class="space-y-2">
+                      <label class="text-xs text-gray-400 font-medium">Selected Element Selector</label>
+                      <div class="flex space-x-2">
+                        <input 
+                          type="text" 
+                          placeholder="auto" 
+                          value={selector} 
+                          onChange={e => setSelector(e.target.value)}
+                          class="flex-1 px-3 py-2 bg-dark-950/80 border border-white/10 rounded-lg text-sm text-emerald-400 font-mono focus:outline-none focus:border-blue-500 transition-colors"
+                        />
+                        <button 
+                          onClick={() => {
+                            setSelector('');
+                            setDiscoveredUrls([]);
+                          }}
+                          class="px-2.5 bg-white/5 hover:bg-white/10 rounded-lg border border-white/10 text-gray-400 transition-colors"
+                          title="Clear Selector"
+                        >
+                          ✕
+                        </button>
+                      </div>
+                    </div>
+
+                    <div class="space-y-3">
+                      <label class="text-xs text-gray-400 font-medium">Save As Profile</label>
+                      <div class="flex space-x-2">
+                        <input 
+                          type="text" 
+                          placeholder="Profile Name" 
+                          value={profileName} 
+                          onChange={e => setProfileName(e.target.value)}
+                          class="flex-1 px-3 py-2 bg-dark-950/80 border border-white/10 rounded-lg text-sm text-gray-200 focus:outline-none focus:border-blue-500 transition-colors"
+                        />
+                        <button 
+                          onClick={handleSaveProfile}
+                          class="px-4 bg-white/5 hover:bg-white/10 rounded-lg border border-white/10 text-sm font-semibold transition-colors text-blue-400 active:scale-95"
+                        >
+                          Save
+                        </button>
+                      </div>
+                    </div>
+
+                    {/* Settings Checkboxes */}
+                    <div class="flex items-center space-x-6 pt-1">
+                      <label class="flex items-center text-xs text-gray-400 cursor-pointer">
+                        <input 
+                          type="checkbox" 
+                          checked={includeImages} 
+                          onChange={e => setIncludeImages(e.target.checked)}
+                          class="rounded bg-dark-950 border-white/10 text-blue-500 mr-2 focus:ring-0 focus:ring-offset-0"
+                        />
+                        Include Images
+                      </label>
+                      <label class="flex items-center text-xs text-gray-400 cursor-pointer">
+                        <input 
+                          type="checkbox" 
+                          checked={downloadMedia} 
+                          onChange={e => setDownloadMedia(e.target.checked)}
+                          class="rounded bg-dark-950 border-white/10 text-blue-500 mr-2 focus:ring-0 focus:ring-offset-0"
+                        />
+                        Download Media
+                      </label>
+                      <label class="flex items-center text-xs text-gray-400 cursor-pointer">
+                        <input 
+                          type="checkbox" 
+                          checked={noMeta} 
+                          onChange={e => setNoMeta(e.target.checked)}
+                          class="rounded bg-dark-950 border-white/10 text-blue-500 mr-2 focus:ring-0 focus:ring-offset-0"
+                        />
+                        Skip Meta
+                      </label>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {consoleMode === 'batch' && (
+                <div class="space-y-4 animate-fade-in">
+                  <h2 class="text-sm font-bold tracking-wider text-gray-400 uppercase">Batch Scraping</h2>
+                  
+                  <div class="space-y-2">
+                    <label class="text-xs text-gray-400 font-medium flex justify-between">
+                      <span>Target URL</span>
+                      <button onClick={handleSyncCategories} disabled={syncingCategories || !url} class="text-[10px] text-blue-400 hover:text-blue-300 disabled:opacity-50">
+                        {syncingCategories ? 'Syncing...' : '🔄 Sync Categories'}
+                      </button>
+                    </label>
+                    <input 
+                      type="url" 
+                      placeholder="https://example.com/item" 
+                      value={url} 
+                      onChange={e => setUrl(e.target.value)}
+                      class="w-full px-3 py-2 bg-dark-950/80 border border-white/10 rounded-lg text-sm text-gray-200 placeholder-gray-500 focus:outline-none focus:border-blue-500 transition-colors"
+                    />
+                    
+                    {discoveredCategories.length > 0 && (
+                      <div class="mt-2 p-2 bg-white/5 border border-white/10 rounded-lg max-h-32 overflow-y-auto custom-scrollbar">
+                        <div class="text-[10px] text-gray-400 mb-1">Select a Category:</div>
+                        <div class="flex flex-wrap gap-1.5">
+                          {discoveredCategories.map((c, i) => (
+                            <button
+                              key={i}
+                              onClick={() => {
+                                setUrl(c.url);
+                                setCategory(c.name.toLowerCase().replace(/[^a-z0-9]+/g, '-'));
+                                setDiscoveredCategories([]); // hide after selection
+                              }}
+                              class="px-2 py-1 bg-dark-950 border border-blue-500/30 text-blue-400 hover:bg-blue-500/10 rounded text-[10px] transition-colors"
+                              title={c.url}
+                            >
+                              {c.name}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+
+                  <div class="space-y-2">
+                    <label class="text-xs text-gray-400 font-medium">Category</label>
+                    <input 
+                      type="text" 
+                      placeholder="e.g. blog, news (optional)" 
+                      value={category} 
+                      onChange={e => setCategory(e.target.value)}
+                      class="w-full px-3 py-2 bg-dark-950/80 border border-white/10 rounded-lg text-sm text-gray-200 placeholder-gray-500 focus:outline-none focus:border-blue-500 transition-colors"
+                    />
+                  </div>
+
+                  <div class="space-y-2">
+                    <label class="text-xs text-gray-400 font-medium">Link Selector</label>
+                    <div class="flex space-x-2">
+                      <input 
+                        type="text" 
+                        placeholder="a.story-link" 
+                        value={selector} 
+                        onChange={e => setSelector(e.target.value)}
+                        class="flex-1 px-3 py-2 bg-dark-950/80 border border-white/10 rounded-lg text-sm text-emerald-400 font-mono focus:outline-none focus:border-blue-500 transition-colors"
+                      />
+                      <button 
+                        onClick={handleAutoDetectSelector}
+                        disabled={autoDetecting || !url}
+                        class="px-4 bg-white/5 hover:bg-white/10 disabled:opacity-50 rounded-lg border border-white/10 text-sm font-semibold transition-colors text-purple-400 active:scale-95 whitespace-nowrap"
+                        title="Auto-detect dominant link selector"
+                      >
+                        {autoDetecting ? '🪄 ...' : '🪄 Auto'}
+                      </button>
+                    </div>
+                  </div>
+
+                  <div class="grid grid-cols-2 gap-2">
+                    <div class="space-y-1">
+                      <label class="text-[10px] text-gray-400 font-medium">Concurrency</label>
+                      <input 
+                        type="number" 
+                        value={batchConcurrency} 
+                        onChange={e => setBatchConcurrency(e.target.value)}
+                        class="w-full px-2.5 py-1.5 bg-dark-950/80 border border-white/10 rounded-lg text-xs text-gray-200 focus:outline-none focus:border-blue-500"
+                      />
+                    </div>
+                    <div class="space-y-1">
+                      <label class="text-[10px] text-gray-400 font-medium">Delay (ms)</label>
+                      <input 
+                        type="number" 
+                        value={batchDelay} 
+                        onChange={e => setBatchDelay(e.target.value)}
+                        class="w-full px-2.5 py-1.5 bg-dark-950/80 border border-white/10 rounded-lg text-xs text-gray-200 focus:outline-none focus:border-blue-500"
+                      />
+                    </div>
+                  </div>
+
+                  <button 
+                    onClick={handleDiscoverLinks} 
+                    disabled={loading || discovering || !selector}
+                    class="w-full py-2 bg-brand-600/80 hover:bg-brand-600 disabled:opacity-40 text-white rounded-lg text-sm font-semibold transition-all active:scale-95 flex items-center justify-center border border-brand-500/20 shadow-md"
+                  >
+                    {discovering ? '🔍 Searching...' : '🔍 Discover Links'}
+                  </button>
+
+                  {/* Discovered URLs list & live scrape */}
+                  {discoveredUrls.length > 0 && (
+                    <div class="space-y-2.5 bg-white/5 border border-white/5 p-3 rounded-xl">
+                      <div class="flex justify-between items-center">
+                        <span class="text-xs font-bold text-gray-300">📄 {discoveredUrls.length} Links Found</span>
+                        <button
+                          onClick={() => setDiscoveredUrls([])}
+                          class="text-[10px] text-gray-500 hover:text-gray-300"
+                        >
+                          Clear
+                        </button>
+                      </div>
+                      
+                      <div class="max-h-28 overflow-y-auto custom-scrollbar space-y-1 p-1.5 bg-dark-950/80 rounded-lg border border-white/5">
+                        {discoveredUrls.map((u, i) => (
+                          <div key={i} class="text-[9px] text-gray-400 truncate font-mono" title={u}>
+                            • {u}
+                          </div>
+                        ))}
+                      </div>
+
+                      <button
+                        onClick={handleStartBatchScrape}
+                        disabled={loading || batchProgress?.active}
+                        class="w-full py-1.5 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white rounded-lg text-xs font-semibold transition-all flex items-center justify-center active:scale-95 shadow-lg"
+                      >
+                        ⚡ Start Live Batch Scrape
+                      </button>
+                    </div>
+                  )}
+
+                  {/* Settings Checkboxes */}
+                  <div class="flex items-center space-x-6 pt-1 border-t border-white/5">
+                    <label class="flex items-center text-xs text-gray-400 cursor-pointer">
+                      <input 
+                        type="checkbox" 
+                        checked={includeImages} 
+                        onChange={e => setIncludeImages(e.target.checked)}
+                        class="rounded bg-dark-950 border-white/10 text-blue-500 mr-2 focus:ring-0 focus:ring-offset-0"
+                      />
+                      Include Images
+                    </label>
+                    <label class="flex items-center text-xs text-gray-400 cursor-pointer">
+                      <input 
+                        type="checkbox" 
+                        checked={downloadMedia} 
+                        onChange={e => setDownloadMedia(e.target.checked)}
+                        class="rounded bg-dark-950 border-white/10 text-blue-500 mr-2 focus:ring-0 focus:ring-offset-0"
+                      />
+                      Download Media
+                    </label>
+                    <label class="flex items-center text-xs text-gray-400 cursor-pointer">
+                      <input 
+                        type="checkbox" 
+                        checked={noMeta} 
+                        onChange={e => setNoMeta(e.target.checked)}
+                        class="rounded bg-dark-950 border-white/10 text-blue-500 mr-2 focus:ring-0 focus:ring-offset-0"
+                      />
+                      Skip Meta
+                    </label>
+                  </div>
+                </div>
+              )}
+
+              {consoleMode === 'spider' && (
+                <div class="space-y-4 animate-fade-in">
+                  <h2 class="text-sm font-bold tracking-wider text-gray-400 uppercase">Website Spider</h2>
+                  
+                  <div class="space-y-2">
+                    <label class="text-xs text-gray-400 font-medium">Seed URL</label>
+                    <input 
+                      type="url" 
+                      placeholder="https://example.com" 
+                      value={url} 
+                      onChange={e => setUrl(e.target.value)}
+                      class="w-full px-3 py-2 bg-dark-950/80 border border-white/10 rounded-lg text-sm text-gray-200 placeholder-gray-500 focus:outline-none focus:border-blue-500 transition-colors"
+                    />
+                  </div>
+
+                  <div class="space-y-2">
+                    <label class="text-xs text-gray-400 font-medium">Category</label>
+                    <input 
+                      type="text" 
+                      placeholder="e.g. docs, wiki (optional)" 
+                      value={category} 
+                      onChange={e => setCategory(e.target.value)}
+                      class="w-full px-3 py-2 bg-dark-950/80 border border-white/10 rounded-lg text-sm text-gray-200 placeholder-gray-500 focus:outline-none focus:border-blue-500 transition-colors"
+                    />
+                  </div>
+
+                  <div class="grid grid-cols-2 gap-2">
+                    <div class="space-y-1">
+                      <label class="text-[10px] text-gray-400 font-medium">Max Depth</label>
+                      <input 
+                        type="text" 
+                        value={spiderDepth} 
+                        onChange={e => setSpiderDepth(e.target.value)}
+                        class="w-full px-2.5 py-1.5 bg-dark-950/80 border border-white/10 rounded-lg text-xs text-gray-200 focus:outline-none focus:border-blue-500"
+                      />
+                    </div>
+                    <div class="space-y-1">
+                      <label class="text-[10px] text-gray-400 font-medium">Max Pages</label>
+                      <input 
+                        type="number" 
+                        value={spiderMaxPages} 
+                        onChange={e => setSpiderMaxPages(e.target.value)}
+                        class="w-full px-2.5 py-1.5 bg-dark-950/80 border border-white/10 rounded-lg text-xs text-gray-200 focus:outline-none focus:border-blue-500"
+                      />
+                    </div>
+                  </div>
+
+                  <div class="grid grid-cols-2 gap-2">
+                    <div class="space-y-1">
+                      <label class="text-[10px] text-gray-400 font-medium">Concurrency</label>
+                      <input 
+                        type="number" 
+                        value={spiderConcurrency} 
+                        onChange={e => setSpiderConcurrency(e.target.value)}
+                        class="w-full px-2.5 py-1.5 bg-dark-950/80 border border-white/10 rounded-lg text-xs text-gray-200 focus:outline-none focus:border-blue-500"
+                      />
+                    </div>
+                    <div class="space-y-1">
+                      <label class="text-[10px] text-gray-400 font-medium">Delay (ms)</label>
+                      <input 
+                        type="number" 
+                        value={spiderDelay} 
+                        onChange={e => setSpiderDelay(e.target.value)}
+                        class="w-full px-2.5 py-1.5 bg-dark-950/80 border border-white/10 rounded-lg text-xs text-gray-200 focus:outline-none focus:border-blue-500"
+                      />
+                    </div>
+                  </div>
+
+                  {/* Settings Checkboxes */}
+                  <div class="flex items-center space-x-6 pt-1 border-t border-white/5">
+                    <label class="flex items-center text-xs text-gray-400 cursor-pointer">
+                      <input 
+                        type="checkbox" 
+                        checked={includeImages} 
+                        onChange={e => setIncludeImages(e.target.checked)}
+                        class="rounded bg-dark-950 border-white/10 text-blue-500 mr-2 focus:ring-0 focus:ring-offset-0"
+                      />
+                      Include Images
+                    </label>
+                    <label class="flex items-center text-xs text-gray-400 cursor-pointer">
+                      <input 
+                        type="checkbox" 
+                        checked={downloadMedia} 
+                        onChange={e => setDownloadMedia(e.target.checked)}
+                        class="rounded bg-dark-950 border-white/10 text-blue-500 mr-2 focus:ring-0 focus:ring-offset-0"
+                      />
+                      Download Media
+                    </label>
+                    <label class="flex items-center text-xs text-gray-400 cursor-pointer">
+                      <input 
+                        type="checkbox" 
+                        checked={noMeta} 
+                        onChange={e => setNoMeta(e.target.checked)}
+                        class="rounded bg-dark-950 border-white/10 text-blue-500 mr-2 focus:ring-0 focus:ring-offset-0"
+                      />
+                      Skip Meta
+                    </label>
+                  </div>
+
+                  <button 
+                    onClick={handleStartSpider} 
+                    disabled={spiderActive}
+                    class="w-full py-2 bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 disabled:cursor-not-allowed text-white rounded-lg text-sm font-semibold transition-all active:scale-95 flex items-center justify-center shadow-lg"
+                  >
+                    {spiderActive ? '🕸️ Crawling Website...' : '🕸️ Start Site Spider'}
+                  </button>
+
+                  {(spiderActive || spiderLogs.length > 0) && (
+                    <div class="space-y-3 bg-white/5 border border-white/5 p-4 rounded-xl animate-fade-in font-sans">
+                      <div class="flex justify-between items-center">
+                        <span class="text-xs font-bold text-gray-300">Crawl Progress</span>
+                        {spiderActive ? (
+                          <span class="px-2 py-0.5 bg-indigo-500/10 text-indigo-400 text-[9px] rounded-full border border-indigo-500/20 font-bold animate-pulse">CRAWLING</span>
+                        ) : (
+                          <span class="px-2 py-0.5 bg-emerald-500/10 text-emerald-400 text-[9px] rounded-full border border-emerald-500/20 font-bold">FINISHED</span>
+                        )}
+                      </div>
+
+                      {/* Stats grid */}
+                      <div class="grid grid-cols-4 gap-1.5 text-center">
+                        <div class="bg-dark-950/60 p-1.5 rounded-lg border border-white/5">
+                          <div class="text-[9px] text-gray-500">Visited</div>
+                          <div class="text-[11px] font-bold text-gray-200">{spiderStats.visited}</div>
+                        </div>
+                        <div class="bg-dark-950/60 p-1.5 rounded-lg border border-white/5">
+                          <div class="text-[9px] text-gray-500">Queue</div>
+                          <div class="text-[11px] font-bold text-gray-200">{spiderStats.queued}</div>
+                        </div>
+                        <div class="bg-dark-950/60 p-1.5 rounded-lg border border-white/5">
+                          <div class="text-[9px] text-emerald-500">Ok</div>
+                          <div class="text-[11px] font-bold text-emerald-400">{spiderStats.succeeded}</div>
+                        </div>
+                        <div class="bg-dark-950/60 p-1.5 rounded-lg border border-white/5">
+                          <div class="text-[9px] text-red-500">Fail</div>
+                          <div class="text-[11px] font-bold text-red-400">{spiderStats.failed}</div>
+                        </div>
+                      </div>
+
+                      {/* Log output */}
+                      <div class="space-y-1">
+                        <div class="text-[10px] text-gray-400 font-semibold">Crawl Logs:</div>
+                        <div class="h-32 overflow-y-auto custom-scrollbar bg-dark-950 border border-white/5 p-2 rounded-lg text-[9px] font-mono text-gray-400 space-y-1">
+                          {spiderLogs.slice().reverse().map((log, idx) => (
+                            <div key={idx} class="truncate" title={log}>{log}</div>
+                          ))}
+                        </div>
+                      </div>
+
+                      {spiderActive && (
+                        <button
+                          onClick={handleCancelSpider}
+                          class="w-full py-1.5 bg-red-600/80 hover:bg-red-600 text-white rounded-lg text-xs font-semibold transition-all active:scale-95 flex items-center justify-center border border-red-500/20 shadow-md"
+                        >
+                          🛑 Cancel Spider Crawl
+                        </button>
+                      )}
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* Profiles list */}
+              <div class="space-y-3 pt-4 border-t border-white/5 flex-1 flex flex-col min-h-[160px]">
+                <h2 class="text-sm font-bold tracking-wider text-gray-400 uppercase">Profiles</h2>
+                <div class="flex-1 overflow-y-auto custom-scrollbar space-y-2 max-h-[220px]">
+                  {profiles.length === 0 ? (
+                    <div class="text-xs text-gray-500 italic p-2">No saved profiles. Use visual selector to create one.</div>
+                  ) : (
+                    profiles.map(p => (
+                      <div 
+                        key={p.id} 
+                        onClick={() => handleApplyProfile(p)}
+                        class="p-2.5 rounded-lg bg-white/5 hover:bg-white/10 border border-white/5 hover:border-white/10 cursor-pointer transition-all flex justify-between items-center group active:scale-98"
+                      >
+                        <div class="truncate">
+                          <div class="text-xs font-semibold text-gray-200 truncate">{p.name}</div>
+                          <div class="text-[10px] text-emerald-400 font-mono truncate">{p.selectors?.content || 'auto'}</div>
+                        </div>
+                        <span class="text-[9px] text-gray-500 group-hover:text-blue-400 transition-colors uppercase font-bold shrink-0 ml-2">Apply</span>
+                      </div>
+                    ))
+                  )}
+                </div>
+              </div>
+
+              {/* History list */}
+              <div class="space-y-3 pt-4 border-t border-white/5 flex-1 flex flex-col min-h-[180px]">
+                <div class="flex justify-between items-center">
+                  <h2 class="text-sm font-bold tracking-wider text-gray-400 uppercase">Recent Scrapes</h2>
+                </div>
+                
+                <div class="flex space-x-2 items-center">
+                  <input
+                    type="text"
+                    placeholder="Filter by Category"
+                    value={categoryFilter}
+                    onChange={e => {
+                      setCategoryFilter(e.target.value);
+                      loadData(e.target.value);
+                    }}
+                    class="w-full px-2.5 py-1 bg-dark-950/60 border border-white/10 rounded-md text-xs text-gray-300 placeholder-gray-500 focus:outline-none focus:border-blue-500 transition-colors"
+                  />
+                  {categoryFilter && (
+                    <button
+                      onClick={() => {
+                        setCategoryFilter('');
+                        loadData('');
+                      }}
+                      class="text-xs text-gray-500 hover:text-gray-300"
+                    >
+                      Clear
+                    </button>
+                  )}
+                </div>
+
+                <div class="flex-1 overflow-y-auto custom-scrollbar space-y-2 max-h-[250px]">
+                  {history.length === 0 ? (
+                    <div class="text-xs text-gray-500 italic p-2">No scrape records in SQLite.</div>
+                  ) : (
+                    history.slice(0, 10).map(s => (
+                      <div 
+                        key={s.id} 
+                        onClick={() => handleViewScrape(s)}
+                        class="p-2 rounded-lg bg-dark-950/40 hover:bg-white/5 border border-white/5 cursor-pointer transition-all flex items-start space-x-2.5 active:scale-98"
+                      >
+                        <span class={`text-[10px] px-1.5 py-0.5 rounded font-bold shrink-0 mt-0.5 ${s.status === 'success' ? 'bg-emerald-500/10 text-emerald-400' : 'bg-red-500/10 text-red-400'}`}>
+                          #{s.id}
+                        </span>
+                        <div class="min-w-0 flex-1">
+                          <div class="text-xs text-gray-300 font-medium truncate">{s.title || s.url}</div>
+                          <div class="text-[9px] text-gray-500 truncate">{s.url}</div>
+                          {s.category && (
+                            <span class="inline-block mt-1 text-[8px] bg-blue-500/10 text-blue-400 px-1 py-0.2 rounded border border-blue-500/15 font-semibold">
+                              {s.category}
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                    ))
+                  )}
+                </div>
+              </div>
+
+            </section>
+
+            {/* Right Display Panel */}
+            <section class="flex-1 flex flex-col bg-dark-950/40 overflow-hidden relative">
+              {/* Tab Selector */}
+              <div class="h-12 border-b border-white/5 flex items-center px-6 space-x-4 shrink-0 bg-dark-950/20">
+                <button 
+                  onClick={() => setActiveTab('iframe')}
+                  class={`h-full px-4 text-sm font-semibold border-b-2 transition-all flex items-center ${activeTab === 'iframe' ? 'border-blue-500 text-blue-400' : 'border-transparent text-gray-400 hover:text-gray-200'}`}
+                >
+                  🌐 Target Web Preview
+                </button>
+                <button 
+                  onClick={() => setActiveTab('markdown')}
+                  class={`h-full px-4 text-sm font-semibold border-b-2 transition-all flex items-center ${activeTab === 'markdown' ? 'border-blue-500 text-blue-400' : 'border-transparent text-gray-400 hover:text-gray-200'}`}
+                >
+                  📝 Extracted Markdown
+                </button>
+              </div>
+
+              {/* Loader Overlay */}
+              {loading && (
+                <div class="absolute inset-0 bg-dark-950/80 flex flex-col items-center justify-center z-50">
+                  <div class="relative w-16 h-16 mb-4">
+                    <div class="absolute inset-0 rounded-full border-4 border-blue-500/20 border-t-blue-500 animate-spin"></div>
+                  </div>
+                  {batchProgress ? (
+                    <div class="text-center space-y-2 px-6">
+                      <p class="text-sm font-semibold text-emerald-400 tracking-wider animate-pulse uppercase">
+                        BATCH SCRAPING PROGRESS
+                      </p>
+                      <p class="text-xs text-gray-400 font-mono">
+                        URL {batchProgress.current} / {batchProgress.total} 
+                        ({batchProgress.succeeded} ok, {batchProgress.failed} failed)
+                      </p>
+                      <div class="w-48 h-1.5 bg-white/10 rounded-full overflow-hidden mx-auto mt-2">
+                        <div 
+                          class="h-full bg-emerald-500 transition-all duration-300" 
+                          style={{ width: `${(batchProgress.current / batchProgress.total) * 100}%` }}
+                        ></div>
+                      </div>
+                    </div>
+                  ) : (
+                    <p class="text-sm font-semibold text-blue-400 tracking-wider animate-pulse">PROCESSING SITE...</p>
+                  )}
+                </div>
+              )}
+
+              {/* Tab 1: Iframe preview */}
+              <div class={`flex-1 h-full w-full relative ${activeTab === 'iframe' ? 'block' : 'hidden'}`}>
+                {iframeUrl ? (
+                  <iframe 
+                    ref={iframeRef}
+                    src={iframeUrl} 
+                    onLoad={() => {
+                      if (!batchProgress) {
+                        setLoading(false);
+                      }
+                    }}
+                    class="w-full h-full border-none bg-white"
+                  ></iframe>
+                ) : (
+                  <div class="w-full h-full flex flex-col items-center justify-center p-6 text-center space-y-4">
+                    <div class="text-5xl text-gray-600">🕸️</div>
+                    <h3 class="text-lg font-bold text-gray-300">No Target URL Loaded</h3>
+                    <p class="text-sm text-gray-500 max-w-sm">Enter a URL on the left panel, and click "Proxy Page" to load it into this visual picker pane.</p>
+                  </div>
+                )}
+              </div>
+
+              {/* Tab 2: Markdown preview */}
+              <div class={`flex-1 h-full overflow-auto custom-scrollbar p-6 ${activeTab === 'markdown' ? 'block' : 'hidden'}`}>
+                {markdownOutput ? (
+                  <div class="space-y-4 max-w-4xl mx-auto">
+                    <div class="flex justify-between items-center bg-white/5 border border-white/5 p-3 rounded-lg">
+                      <span class="text-xs text-gray-400 font-mono">Word Count: {markdownOutput.split(/\s+/).length}</span>
+                      <button 
+                        onClick={handleCopyMarkdown}
+                        class="px-3 py-1 bg-blue-600/20 hover:bg-blue-600/30 text-blue-400 border border-blue-500/30 text-xs font-semibold rounded-lg transition-colors active:scale-95 flex items-center"
+                      >
+                        Copy to Clipboard
+                      </button>
+                    </div>
+                    <pre class="p-6 rounded-xl border border-white/10 bg-dark-950 font-mono text-xs text-emerald-400 overflow-x-auto custom-scrollbar leading-relaxed whitespace-pre-wrap">
+                      {markdownOutput}
+                    </pre>
+                  </div>
+                ) : (
+                  <div class="w-full h-full flex flex-col items-center justify-center p-6 text-center space-y-4">
+                    <div class="text-5xl text-gray-600">📝</div>
+                    <h3 class="text-lg font-bold text-gray-300">No Markdown Extracted</h3>
+                    <p class="text-sm text-gray-500 max-w-sm">Target a site first, click "Scrape Now" or select an item from scrape history to view its clean Markdown here.</p>
+                  </div>
+                )}
+              </div>
+            </section>
+          </main>
+
+          {/* Toast Notification */}
+          {statusMsg.text && (
+            <div class="fixed bottom-6 right-6 z-50 animate-bounce">
+              <div class={`px-5 py-3 rounded-xl shadow-2xl flex items-center space-x-3 text-sm font-semibold border ${
+                statusMsg.type === 'success' ? 'bg-emerald-950/90 text-emerald-400 border-emerald-500/30' :
+                statusMsg.type === 'error' ? 'bg-red-950/90 text-red-400 border-red-500/30' :
+                'bg-blue-950/90 text-blue-400 border-blue-500/30'
+              }`}>
+                <span>{statusMsg.type === 'success' ? '✔' : statusMsg.type === 'error' ? '✖' : 'ℹ'}</span>
+                <span>{statusMsg.text}</span>
+              </div>
+            </div>
+          )}
+        </div>
+      );
+    }
+
+    const root = ReactDOM.createRoot(document.getElementById('root'));
+    root.render(<App />);
