@@ -6,8 +6,22 @@ import https from 'https';
 import { getCachedPage, saveCachedPage } from './storage.js';
 import path from 'path';
 
-const httpAgent = new http.Agent({ keepAlive: true });
-const httpsAgent = new https.Agent({ keepAlive: true });
+const httpAgent = new http.Agent({ keepAlive: true, maxSockets: 100, maxFreeSockets: 10 });
+const httpsAgent = new https.Agent({ keepAlive: true, maxSockets: 100, maxFreeSockets: 10 });
+
+const turndownServiceStandard = new TurndownService({
+  headingStyle: 'atx',
+  codeBlockStyle: 'fenced'
+});
+
+const turndownServiceNoImages = new TurndownService({
+  headingStyle: 'atx',
+  codeBlockStyle: 'fenced'
+});
+turndownServiceNoImages.addRule('stripImages', {
+  filter: 'img',
+  replacement: () => ''
+});
 
 /**
  * Fetches HTML from a given URL with options. Supports HTTP Conditional Caching (ETag/Last-Modified).
@@ -330,27 +344,15 @@ export function extractMetadata($, url) {
 }
 
 /**
- * Converts a Cheerio element to Markdown.
+ * Converts a Cheerio element to Markdown using cached global instances.
  * @param {object} rootElement 
  * @param {object} options 
  * @returns {string}
  */
 export function convertToMarkdown(rootElement, options = {}) {
-  const turndownService = new TurndownService({
-    headingStyle: 'atx',
-    codeBlockStyle: 'fenced'
-  });
-
-  // Handle images option
-  if (!options.images) {
-    turndownService.addRule('stripImages', {
-      filter: 'img',
-      replacement: () => ''
-    });
-  }
-
+  const service = options.images ? turndownServiceStandard : turndownServiceNoImages;
   const html = rootElement.html() || '';
-  return turndownService.turndown(html);
+  return service.turndown(html);
 }
 
 /**
@@ -394,7 +396,14 @@ export function resolveUrls($, baseUrl) {
  */
 export async function scrapePage(url, options = {}) {
   const html = await fetchHtml(url, options);
-  const $ = cheerio.load(html);
+  
+  // Fast string-based DOM stripping to prevent Cheerio memory bloat
+  const strippedHtml = html
+    .replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, '')
+    .replace(/<style\b[^<]*(?:(?!<\/style>)<[^<]*)*<\/style>/gi, '')
+    .replace(/<svg\b[^<]*(?:(?!<\/svg>)<[^<]*)*<\/svg>/gi, '');
+
+  const $ = cheerio.load(strippedHtml);
   
   const metadata = extractMetadata($, url);
   
