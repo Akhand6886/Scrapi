@@ -7,6 +7,7 @@ import * as cheerio from 'cheerio';
 import path from 'path';
 import fs from 'fs/promises';
 import { fileURLToPath } from 'url';
+import { exec } from 'child_process';
 import { initStorage, getAllProfiles, saveProfile, getAllScrapes, insertScrape, saveMarkdownFile, downloadMediaFiles } from '../storage.js';
 import { scrapePage, discoverCategories, autoDetectLinkSelector } from '../scraper.js';
 import { runSpider } from '../spider.js';
@@ -525,6 +526,16 @@ const PORT = process.env.PORT || 3001;
 initStorage().then(() => {
   app.listen(PORT, async () => {
     console.log(`🚀 Scrapi Local Server running on http://localhost:${PORT}`);
+    
+    console.log('⚡ Compiling React UI bundle...');
+    exec('npm run build:ui', (err, stdout, stderr) => {
+      if (err) {
+        console.error('⚠️ Failed to compile UI bundle:', stderr);
+      } else {
+        console.log('✓ UI Bundle compiled successfully!');
+      }
+    });
+
     // Warm up the browser background-wise
     try {
       await getSharedBrowser();
