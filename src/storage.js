@@ -129,6 +129,15 @@ export async function saveMarkdownFile(markdown, metadata, options = {}) {
   fileContent += markdown;
 
   await fs.writeFile(fullPath, fileContent, 'utf-8');
+
+  // Generate metadata.json sidecar
+  const sidecarPath = path.join(outputDir, `${baseFilename}-metadata.json`);
+  const sidecarData = {
+    ...metadata,
+    word_count: markdown.split(/\s+/).filter(Boolean).length
+  };
+  await fs.writeFile(sidecarPath, JSON.stringify(sidecarData, null, 2), 'utf-8');
+
   return path.relative(baseOutputDir, fullPath);
 }
 
