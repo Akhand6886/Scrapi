@@ -1,6 +1,7 @@
 import axios from 'axios';
 import * as cheerio from 'cheerio';
 import TurndownService from 'turndown';
+import { gfm } from 'turndown-plugin-gfm';
 import http from 'http';
 import https from 'https';
 import { getCachedPage, saveCachedPage } from './storage.js';
@@ -13,11 +14,13 @@ const turndownServiceStandard = new TurndownService({
   headingStyle: 'atx',
   codeBlockStyle: 'fenced'
 });
+turndownServiceStandard.use(gfm);
 
 const turndownServiceNoImages = new TurndownService({
   headingStyle: 'atx',
   codeBlockStyle: 'fenced'
 });
+turndownServiceNoImages.use(gfm);
 turndownServiceNoImages.addRule('stripImages', {
   filter: 'img',
   replacement: () => ''
@@ -31,15 +34,21 @@ turndownServiceNoImages.addRule('stripImages', {
  */
 export async function fetchHtml(url, options = {}) {
   const timeout = options.timeout || 10000;
-  const userAgent = options.userAgent || 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
+  
+  const userAgents = [
+    'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36',
+    'Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:109.0) Gecko/20100101 Firefox/115.0',
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Edge/119.0.0.0 Safari/537.36',
+    'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.1 Safari/605.1.15'
+  ];
+  const userAgent = options.userAgent || userAgents[Math.floor(Math.random() * userAgents.length)];
 
   let cached = null;
   if (!options.noCache) {
     try {
       cached = getCachedPage(url);
-    } catch (e) {
-      // Storage might not be initialized yet in test scripts
-    }
+    } catch (e) {}
   }
 
   const headers = {
@@ -48,58 +57,69 @@ export async function fetchHtml(url, options = {}) {
     'Accept-Language': 'en-US,en;q=0.5',
   };
 
-  // Add conditional headers if cache exists
   if (cached) {
-    if (cached.etag) {
-      headers['If-None-Match'] = cached.etag;
-    }
-    if (cached.last_modified) {
-      headers['If-Modified-Since'] = cached.last_modified;
-    }
+    if (cached.etag) headers['If-None-Match'] = cached.etag;
+    if (cached.last_modified) headers['If-Modified-Since'] = cached.last_modified;
   }
 
-  try {
-    const response = await axios.get(url, {
-      timeout,
-      maxContentLength: 5 * 1024 * 1024, // Protect system: max download limit 5MB
-      responseType: 'text',
-      headers,
-      httpAgent,
-      httpsAgent,
-      validateStatus: (status) => (status >= 200 && status < 300) || status === 304
-    });
+  const maxRetries = 3;
+  let attempt = 0;
 
-    // If 304 Not Modified, return the cached body immediately (saves network & CPU)
-    if (response.status === 304 && cached) {
-      console.log(`⚡ [Cache] Page content unchanged (status 304). Serving from cache.`);
-      return cached.html;
-    }
+  while (attempt <= maxRetries) {
+    try {
+      const response = await axios.get(url, {
+        timeout,
+        maxContentLength: 5 * 1024 * 1024,
+        responseType: 'text',
+        headers,
+        httpAgent,
+        httpsAgent,
+        validateStatus: (status) => (status >= 200 && status < 300) || status === 304 || status === 429 || (status >= 500 && status < 600)
+      });
 
-    // Verify that the response content type looks like HTML
-    const contentType = response.headers['content-type'] || '';
-    if (contentType && !contentType.includes('text/html') && !contentType.includes('application/xhtml+xml')) {
-      throw new Error(`Invalid content type: "${contentType}". Only HTML documents can be scraped.`);
-    }
-
-    const html = response.data;
-
-    // Cache the successful response
-    if (!options.noCache) {
-      try {
-        saveCachedPage(url, html, response.headers['etag'], response.headers['last-modified']);
-      } catch (e) {
-        // Ignore cache saving failures
+      if (response.status === 429 || (response.status >= 500 && response.status < 600)) {
+        if (attempt === maxRetries) {
+          throw new Error(`Failed after ${maxRetries} retries. Status: ${response.status}`);
+        }
+        const delay = Math.pow(2, attempt) * 1000 + Math.random() * 1000;
+        console.warn(`⚠️ [Retry] Rate limited or server error (Status ${response.status}) on ${url}. Retrying in ${Math.round(delay)}ms...`);
+        await new Promise(res => setTimeout(res, delay));
+        attempt++;
+        continue; // Retry
       }
-    }
 
-    return html;
-  } catch (err) {
-    // If request fails but we have a cached copy, fallback to cached copy
-    if (cached) {
-      console.warn(`⚠️ [Cache Fallback] Request failed: ${err.message}. Serving stale cached content.`);
-      return cached.html;
+      if (response.status === 304 && cached) {
+        console.log(`⚡ [Cache] Page content unchanged (status 304). Serving from cache.`);
+        return cached.html;
+      }
+
+      const contentType = response.headers['content-type'] || '';
+      if (contentType && !contentType.includes('text/html') && !contentType.includes('application/xhtml+xml')) {
+        throw new Error(`Invalid content type: "${contentType}".`);
+      }
+
+      const html = response.data;
+      if (!options.noCache) {
+        try {
+          saveCachedPage(url, html, response.headers['etag'], response.headers['last-modified']);
+        } catch (e) {}
+      }
+
+      return html;
+    } catch (err) {
+      if (attempt === maxRetries || err.message.includes('Invalid content type')) {
+        if (cached) {
+          console.warn(`⚠️ [Cache Fallback] Request failed: ${err.message}. Serving stale cached content.`);
+          return cached.html;
+        }
+        throw err;
+      }
+      
+      const delay = Math.pow(2, attempt) * 1000 + Math.random() * 1000;
+      console.warn(`⚠️ [Retry] Network error (${err.message}) on ${url}. Retrying in ${Math.round(delay)}ms...`);
+      await new Promise(res => setTimeout(res, delay));
+      attempt++;
     }
-    throw err;
   }
 }
 
