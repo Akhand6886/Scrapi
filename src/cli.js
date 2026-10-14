@@ -20,13 +20,16 @@ import {
 } from './storage.js';
 import { extractData, summarizeContent, groupScrapes } from './llm.js';
 import { runSpider } from './spider.js';
+import { startShell } from './cli/shell.js';
+import { MCPServer } from './mcp/server.js';
+import { globalFetcherPool } from './fetchers/index.js';
 
 const program = new Command();
 
 program
   .name('scrapi')
-  .description('A terminal-first, developer-grade web scraping tool')
-  .version('1.0.0');
+  .description('A modular, adaptive, developer-grade web scraping framework')
+  .version('2.0.0');
 
 // Helper to log errors nicely
 function handleError(error, spinner) {
@@ -39,7 +42,8 @@ function handleError(error, spinner) {
 
 // Scrape helper used by scrape command and batch command
 async function performScrape(url, options) {
-  const spinner = ora(`Scraping ${chalk.cyan(url)}...`).start();
+  const fetcherType = options.fetcher || 'static';
+  const spinner = ora(`Scraping ${chalk.cyan(url)} (Fetcher: ${chalk.yellow(fetcherType)})...`).start();
   let dbRecord = {
     url,
     scraped_at: new Date().toISOString(),
@@ -56,8 +60,6 @@ async function performScrape(url, options) {
         throw new Error(`Profile "${options.profile}" not found.`);
       }
       spinner.text = `Scraping ${chalk.cyan(url)} using profile "${options.profile}"...`;
-      // Use selectors from the profile. For Phase 1 we target the selector, 
-      // in Phase 2 picker this gets mapped. Let's merge profile selectors.
       if (profile.selectors && profile.selectors.content) {
         options.selector = profile.selectors.content;
       }
@@ -70,7 +72,8 @@ async function performScrape(url, options) {
       selector: options.selector,
       images: !!options.images,
       downloadMedia: !!options.downloadMedia,
-      noCache: !!options.noCache
+      noCache: !!options.noCache,
+      fetcher: options.fetcher || 'static'
     });
 
     dbRecord.title = result.metadata.title;
@@ -122,7 +125,6 @@ async function performScrape(url, options) {
           
           const jsonData = await extractData(result.markdown, url, schemaName, { instruction });
           
-          // Save JSON output if requested
           if (options.outputJson) {
             const jsonFilename = await saveJsonFile(jsonData, filename, { 
               output: options.output,
@@ -142,7 +144,6 @@ async function performScrape(url, options) {
       }
     }
 
-    // Insert into DB unless disabled
     if (!options.noDb) {
       insertScrape(dbRecord);
     }
@@ -165,10 +166,11 @@ async function performScrape(url, options) {
 // Scrape command
 program
   .command('scrape <url>')
-  .description('Scrape a single URL and save as Markdown + SQLite row')
+  .description('Scrape a single URL with multi-tier fetchers and save as Markdown')
+  .option('-f, --fetcher <type>', 'Fetcher tier: static, dynamic (Playwright), or stealth (Anti-bot)', 'static')
   .option('-o, --output <dir>', 'Directory to save Markdown files', './output')
   .option('-s, --selector <css>', 'CSS selector to target specific content area', 'auto')
-  .option('-f, --filename <name>', 'Custom output filename (no extension)')
+  .option('--filename <name>', 'Custom output filename (no extension)')
   .option('--category <name>', 'Category name to tag scrape and create subfolder')
   .option('--images', 'Include image alt text in output', false)
   .option('--download-media', 'Download images to local media directory', false)
@@ -177,7 +179,6 @@ program
   .option('--no-db', 'Skip SQLite database insert', false)
   .option('--timeout <ms>', 'Request timeout in milliseconds', '10000')
   .option('--profile <name>', 'Use saved visual scraper profile name')
-  // LLM options
   .option('--llm', 'Enable LLM processing after scrape', false)
   .option('--extract <instruction>', 'Plain-English extraction instruction')
   .option('--summarize', 'Auto-summarize the scraped content', false)
@@ -189,10 +190,42 @@ program
     await performScrape(url, options);
   });
 
+// Shell command (Interactive REPL)
+program
+  .command('shell [url]')
+  .description('Open an interactive Scrapi REPL console to test selectors and fetchers in real time')
+  .option('-f, --fetcher <type>', 'Fetcher tier: static, dynamic, or stealth', 'static')
+  .action(async (url, options) => {
+    await initStorage();
+    await startShell(url, options);
+  });
+
+// MCP Server command
+program
+  .command('mcp')
+  .description('Start Model Context Protocol (MCP) server for AI agent integration (Cursor/Claude)')
+  .action(async () => {
+    const server = new MCPServer();
+    server.start();
+  });
+
+// Serve command (Web Dashboard)
+program
+  .command('serve')
+  .description('Start Scrapi web dashboard and visual selector picker server')
+  .option('-p, --port <number>', 'Port number to run UI server on', '3000')
+  .action(async (options) => {
+    const port = parseInt(options.port, 10) || 3000;
+    process.env.PORT = String(port);
+    console.log(chalk.bold.cyan(`Starting Scrapi Web Dashboard on http://localhost:${port}...`));
+    await import('./ui/server.js');
+  });
+
 // Batch command
 program
   .command('batch <file>')
   .description('Scrape all URLs listed in a .txt file (one per line)')
+  .option('-f, --fetcher <type>', 'Fetcher tier: static, dynamic, or stealth', 'static')
   .option('-o, --output <dir>', 'Directory to save Markdown files', './output')
   .option('-s, --selector <css>', 'CSS selector to target specific content area', 'auto')
   .option('--category <name>', 'Category name to tag scrapes and create subfolder')
@@ -201,7 +234,6 @@ program
   .option('--no-db', 'Skip SQLite database insert', false)
   .option('--timeout <ms>', 'Request timeout in milliseconds', '10000')
   .option('--profile <name>', 'Use saved visual scraper profile name')
-  // LLM options
   .option('--llm', 'Enable LLM processing after scrape', false)
   .option('--extract <instruction>', 'Plain-English extraction instruction')
   .option('--summarize', 'Auto-summarize the scraped content', false)
@@ -236,18 +268,15 @@ program
             successfullyScraped.push(res);
           }
           
-          // Polite delay before next scrape in this worker channel
           if (queue.length > 0) {
             await new Promise(resolve => setTimeout(resolve, 1500));
           }
         }
       };
 
-      // Run workers in parallel
       const workers = Array.from({ length: Math.min(concurrency, urls.length) }, () => runWorker());
       await Promise.all(workers);
 
-      // Grouping logic if requested
       if (options.llm && options.group && successfullyScraped.length > 0) {
         const groupSpinner = ora('Categorizing and grouping batch scrapes...').start();
         try {
@@ -256,11 +285,9 @@ program
           const stamp = Math.floor(Date.now() / 1000).toString().slice(-4);
           const baseName = `batch-grouping-${stamp}`;
           
-          // Save dynamic JSON groupings map
           const jsonPath = path.join(options.output, `${baseName}.json`);
           await fs.writeFile(jsonPath, JSON.stringify(groupings, null, 2), 'utf-8');
           
-          // Write index markdown summary
           let indexMd = `# Batch Scrape Grouping Index\n\n`;
           indexMd += `> Created at: ${new Date().toISOString()}\n\n`;
           
@@ -365,7 +392,6 @@ program
       const srcPath = path.join(options.srcDir, scrape.filename);
       const content = await fs.readFile(srcPath, 'utf-8');
       
-      // Ensure parent directory of destination exists
       await fs.mkdir(path.dirname(options.dest), { recursive: true });
       await fs.writeFile(options.dest, content, 'utf-8');
       
@@ -408,9 +434,7 @@ program
             }
             const absoluteUrl = new URL(href, url).href;
             discoveredUrls.add(absoluteUrl);
-          } catch (e) {
-            // Skip parse errors
-          }
+          } catch (e) {}
         }
       });
       
@@ -441,6 +465,7 @@ program
   .command('crawl <url>')
   .description('Crawl a list/index page, discover nested links, and scrape them concurrently under a category')
   .requiredOption('-s, --selector <css>', 'CSS selector targeting anchor links on list page')
+  .option('-f, --fetcher <type>', 'Fetcher tier: static, dynamic, or stealth', 'static')
   .option('-o, --output <dir>', 'Directory to save Markdown files', './output')
   .option('--category <name>', 'Category name to tag scrapes and create subfolder')
   .option('-c, --concurrency <number>', 'Number of parallel scraper workers', '2')
@@ -451,7 +476,6 @@ program
   .option('--timeout <ms>', 'Request timeout in milliseconds', '10000')
   .option('--profile <name>', 'Use saved visual scraper profile name')
   .option('--delay <ms>', 'Polite rate-limiting delay between requests in milliseconds', '1500')
-  // LLM options
   .option('--llm', 'Enable LLM processing after scrape', false)
   .option('--extract <instruction>', 'Plain-English extraction instruction')
   .option('--summarize', 'Auto-summarize the scraped content', false)
@@ -462,7 +486,7 @@ program
     await initStorage(undefined, options.output);
     const spinner = ora(`Fetching list page: ${chalk.cyan(url)}...`).start();
     try {
-      const html = await fetchHtml(url, { noCache: !!options.noCache });
+      const html = await fetchHtml(url, { noCache: !!options.noCache, fetcher: options.fetcher });
       spinner.text = 'Discovering links on list page...';
       
       const $ = cheerio.load(html);
@@ -484,9 +508,7 @@ program
             }
             const absoluteUrl = new URL(href, url).href;
             discoveredUrls.add(absoluteUrl);
-          } catch (e) {
-            // Skip parse errors
-          }
+          } catch (e) {}
         }
       });
       
@@ -503,7 +525,6 @@ program
       const queue = [...urls];
       let urlIndex = 0;
 
-      // When crawling subpages, options.selector target was for list page, so default to 'auto' for nested pages
       const scrapeOptions = {
         ...options,
         selector: 'auto'
@@ -520,7 +541,6 @@ program
             successfullyScraped.push(res);
           }
           
-          // Polite delay
           const delayVal = options.delay !== undefined ? parseInt(options.delay, 10) : 1500;
           if (queue.length > 0 && delayVal > 0) {
             await new Promise(resolve => setTimeout(resolve, delayVal));
@@ -541,6 +561,7 @@ program
 program
   .command('spider <url>')
   .description('Recursively crawl and scrape an entire website under the same origin')
+  .option('-f, --fetcher <type>', 'Fetcher tier: static, dynamic, or stealth', 'static')
   .option('-o, --output <dir>', 'Directory to save Markdown files', './output')
   .option('-c, --concurrency <number>', 'Number of parallel scraper workers', '2')
   .option('-d, --depth <number>', 'Maximum link crawling depth', 'Infinity')
@@ -553,6 +574,7 @@ program
   .option('--no-db', 'Skip SQLite database insert', false)
   .option('--timeout <ms>', 'Request timeout in milliseconds', '10000')
   .option('--no-cache', 'Bypass HTTP cache and force fresh request', false)
+  .option('--resume <jobId>', 'Resume crawl from a saved checkpoint ID')
   .action(async (url, options) => {
     await initStorage(undefined, options.output);
     const hostName = new URL(url).hostname;
@@ -562,7 +584,8 @@ program
       maxPages: parseInt(options.maxPages, 10),
       concurrency: parseInt(options.concurrency, 10),
       delay: parseInt(options.delay, 10),
-      category: options.category || hostName
+      category: options.category || hostName,
+      jobId: options.resume || `${hostName}-spider`
     };
 
     const spinner = ora(`Initializing Spider on ${chalk.cyan(url)}...`).start();
