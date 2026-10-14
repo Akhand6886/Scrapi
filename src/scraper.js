@@ -1,30 +1,9 @@
-import axios from 'axios';
 import * as cheerio from 'cheerio';
-import TurndownService from 'turndown';
-import { gfm } from 'turndown-plugin-gfm';
-import http from 'http';
-import https from 'https';
-import { getCachedPage, saveCachedPage } from './storage.js';
 import path from 'path';
-
-const httpAgent = new http.Agent({ keepAlive: true, maxSockets: 100, maxFreeSockets: 10 });
-const httpsAgent = new https.Agent({ keepAlive: true, maxSockets: 100, maxFreeSockets: 10 });
-
-const turndownServiceStandard = new TurndownService({
-  headingStyle: 'atx',
-  codeBlockStyle: 'fenced'
-});
-turndownServiceStandard.use(gfm);
-
-const turndownServiceNoImages = new TurndownService({
-  headingStyle: 'atx',
-  codeBlockStyle: 'fenced'
-});
-turndownServiceNoImages.use(gfm);
-turndownServiceNoImages.addRule('stripImages', {
-  filter: 'img',
-  replacement: () => ''
-});
+import { globalFetcherPool } from './fetchers/index.js';
+import { Response, NOISE_SELECTORS } from './parser/adaptor.js';
+import { AdaptiveEngine } from './parser/adaptive.js';
+import { MarkdownEngine } from './parser/markdown.js';
 
 /**
  * Fetches HTML from a given URL with options. Supports HTTP Conditional Caching (ETag/Last-Modified).
@@ -33,94 +12,8 @@ turndownServiceNoImages.addRule('stripImages', {
  * @returns {Promise<string>}
  */
 export async function fetchHtml(url, options = {}) {
-  const timeout = options.timeout || 10000;
-  
-  const userAgents = [
-    'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36',
-    'Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:109.0) Gecko/20100101 Firefox/115.0',
-    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Edge/119.0.0.0 Safari/537.36',
-    'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.1 Safari/605.1.15'
-  ];
-  const userAgent = options.userAgent || userAgents[Math.floor(Math.random() * userAgents.length)];
-
-  let cached = null;
-  if (!options.noCache) {
-    try {
-      cached = getCachedPage(url);
-    } catch (e) {}
-  }
-
-  const headers = {
-    'User-Agent': userAgent,
-    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9',
-    'Accept-Language': 'en-US,en;q=0.5',
-  };
-
-  if (cached) {
-    if (cached.etag) headers['If-None-Match'] = cached.etag;
-    if (cached.last_modified) headers['If-Modified-Since'] = cached.last_modified;
-  }
-
-  const maxRetries = 3;
-  let attempt = 0;
-
-  while (attempt <= maxRetries) {
-    try {
-      const response = await axios.get(url, {
-        timeout,
-        maxContentLength: 5 * 1024 * 1024,
-        responseType: 'text',
-        headers,
-        httpAgent,
-        httpsAgent,
-        validateStatus: (status) => (status >= 200 && status < 300) || status === 304 || status === 429 || (status >= 500 && status < 600)
-      });
-
-      if (response.status === 429 || (response.status >= 500 && response.status < 600)) {
-        if (attempt === maxRetries) {
-          throw new Error(`Failed after ${maxRetries} retries. Status: ${response.status}`);
-        }
-        const delay = Math.pow(2, attempt) * 1000 + Math.random() * 1000;
-        console.warn(`⚠️ [Retry] Rate limited or server error (Status ${response.status}) on ${url}. Retrying in ${Math.round(delay)}ms...`);
-        await new Promise(res => setTimeout(res, delay));
-        attempt++;
-        continue; // Retry
-      }
-
-      if (response.status === 304 && cached) {
-        console.log(`⚡ [Cache] Page content unchanged (status 304). Serving from cache.`);
-        return cached.html;
-      }
-
-      const contentType = response.headers['content-type'] || '';
-      if (contentType && !contentType.includes('text/html') && !contentType.includes('application/xhtml+xml')) {
-        throw new Error(`Invalid content type: "${contentType}".`);
-      }
-
-      const html = response.data;
-      if (!options.noCache) {
-        try {
-          saveCachedPage(url, html, response.headers['etag'], response.headers['last-modified']);
-        } catch (e) {}
-      }
-
-      return html;
-    } catch (err) {
-      if (attempt === maxRetries || err.message.includes('Invalid content type')) {
-        if (cached) {
-          console.warn(`⚠️ [Cache Fallback] Request failed: ${err.message}. Serving stale cached content.`);
-          return cached.html;
-        }
-        throw err;
-      }
-      
-      const delay = Math.pow(2, attempt) * 1000 + Math.random() * 1000;
-      console.warn(`⚠️ [Retry] Network error (${err.message}) on ${url}. Retrying in ${Math.round(delay)}ms...`);
-      await new Promise(res => setTimeout(res, delay));
-      attempt++;
-    }
-  }
+  const response = await globalFetcherPool.fetch(url, options);
+  return response.rawHtml;
 }
 
 /**
@@ -128,19 +21,13 @@ export async function fetchHtml(url, options = {}) {
  * @param {object} $ 
  */
 export function cleanDom($) {
-  const noiseSelectors = [
-    'nav', 'header', 'footer',
-    'script', 'style', 'noscript', 'iframe',
-    '.cookie-banner', '.popup', '.ad', '.advertisement',
-    '[aria-hidden="true"]', '#cookie-consent', '.social-share'
-  ];
-  $(noiseSelectors.join(', ')).remove();
+  $(NOISE_SELECTORS.join(', ')).remove();
 }
 
 /**
  * Computes the text-to-tag ratio for a given element node.
- * Heuristic: count text characters / number of HTML elements inside.
  * @param {object} element - Cheerio element
+ * @param {object} $ 
  * @returns {number}
  */
 function getTextToTagRatio(element, $) {
@@ -148,113 +35,12 @@ function getTextToTagRatio(element, $) {
   const textLength = text.length;
   if (textLength === 0) return 0;
   
-  const tagsCount = $(element).find('*').length + 1; // +1 to avoid division by zero and include current tag
+  const tagsCount = $(element).find('*').length + 1;
   return textLength / tagsCount;
 }
 
 /**
- * Generates a simple, robust CSS selector for a resolved candidate element.
- * @param {object} $ 
- * @param {object} elem 
- * @returns {string}
- */
-function generateHealedSelector($, elem) {
-  let path = [];
-  let current = elem;
-  while (current && current.type === 'tag') {
-    let tag = current.name;
-    const id = $(current).attr('id');
-    if (id) {
-      path.unshift(`#${id}`);
-      break;
-    }
-    const classAttr = $(current).attr('class');
-    if (classAttr) {
-      const classes = classAttr.trim().split(/\s+/).filter(c => c && !c.startsWith('scrapi-') && /^[a-zA-Z0-9_-]+$/.test(c));
-      if (classes.length > 0) {
-        tag += '.' + classes[0]; // use first class for minimal selector
-      }
-    }
-    path.unshift(tag);
-    current = current.parent;
-  }
-  return path.join(' > ');
-}
-
-/**
- * Resolves a failed selector using multi-anchor structural signatures.
- * @param {object} $ 
- * @param {object} signature 
- * @returns {object|null} Cheerio element selection or null
- */
-function attemptSelfHealing($, signature) {
-  const tagName = signature.tagName || '*';
-  const candidates = $(tagName);
-  if (candidates.length === 0) return null;
-
-  let bestCandidate = null;
-  let maxScore = -1;
-
-  candidates.each((_, elem) => {
-    let score = 0;
-
-    // Anchor 1: Text Content similarity (partial matches)
-    const text = $(elem).text().trim();
-    if (signature.textSnippet && text) {
-      if (text.includes(signature.textSnippet) || signature.textSnippet.includes(text)) {
-        score += 0.5;
-      } else {
-        // Compute word intersection
-        const signatureWords = new Set(signature.textSnippet.toLowerCase().split(/\s+/).filter(Boolean));
-        const candidateWords = new Set(text.toLowerCase().split(/\s+/).filter(Boolean));
-        const intersection = [...signatureWords].filter(w => candidateWords.has(w));
-        if (signatureWords.size > 0) {
-          score += (intersection.length / signatureWords.size) * 0.4;
-        }
-      }
-    }
-
-    // Anchor 2: Class overlap
-    if (signature.classes && signature.classes.length > 0) {
-      const classAttr = $(elem).attr('class') || '';
-      const candidateClasses = classAttr.split(/\s+/).filter(Boolean);
-      const matchedClasses = signature.classes.filter(c => candidateClasses.includes(c));
-      score += (matchedClasses.length / signature.classes.length) * 0.3;
-    }
-
-    // Anchor 3: Parent hierarchy alignment
-    if (signature.parentTagName) {
-      const parent = $(elem).parent();
-      if (parent.length > 0 && parent[0].name.toLowerCase() === signature.parentTagName.toLowerCase()) {
-        score += 0.2;
-      }
-    }
-
-    if (score > maxScore) {
-      maxScore = score;
-      bestCandidate = elem;
-    }
-  });
-
-  // Threshold check to prevent matching random garbage elements
-  if (bestCandidate && maxScore >= 0.35) {
-    const healedSelector = generateHealedSelector($, bestCandidate);
-    console.warn(`✨ [Self-Healing] Successfully recovered target element (Similarity: ${Math.round(maxScore * 100)}%).`);
-    console.warn(`   New dynamic anchor selector: "${healedSelector}"`);
-    return $(bestCandidate);
-  }
-
-  return null;
-}
-
-/**
  * Detects the best content root element.
- * Priority:
- * 1. article
- * 2. main, [role="main"]
- * 3. .content, .post-content, .article-body, #content, #main
- * 4. div with highest text-to-tag ratio (heuristic fallback)
- * 5. body (last resort)
  * @param {object} $ 
  * @param {string|object} selector 
  * @returns {object} Cheerio element selection
@@ -276,35 +62,30 @@ export function findBestContentRoot($, selector = 'auto') {
       return customSelection.first();
     }
 
-    // Target selector failed. Trigger self-healing if we have signature metadata.
     if (signature && (signature.tagName || signature.textSnippet)) {
       console.warn(`⚠️ Primary selector "${targetSelector}" failed to match elements. Initiating self-healing...`);
-      const healedElement = attemptSelfHealing($, signature);
-      if (healedElement) {
-        return healedElement;
+      const healed = AdaptiveEngine.relocate($, signature);
+      if (healed.element) {
+        console.warn(`✨ [Self-Healing] Successfully recovered target element (Similarity: ${Math.round(healed.confidence * 100)}%).`);
+        console.warn(`   New dynamic anchor selector: "${healed.healedSelector}"`);
+        return healed.element.$el;
       }
     }
   }
 
   // Priority 1: article
   const article = $('article');
-  if (article.length > 0) {
-    return article.first();
-  }
+  if (article.length > 0) return article.first();
 
   // Priority 2: main or [role="main"]
   const main = $('main, [role="main"]');
-  if (main.length > 0) {
-    return main.first();
-  }
+  if (main.length > 0) return main.first();
 
   // Priority 3: standard content classes/IDs
   const standardSelectors = ['.content', '.post-content', '.article-body', '#content', '#main'];
   for (const sel of standardSelectors) {
     const el = $(sel);
-    if (el.length > 0) {
-      return el.first();
-    }
+    if (el.length > 0) return el.first();
   }
 
   // Priority 4: div with highest text-to-tag ratio (heuristic)
@@ -312,7 +93,6 @@ export function findBestContentRoot($, selector = 'auto') {
   let maxRatio = -1;
 
   $('div').each((_, elem) => {
-    // Only evaluate divs that have some substantial content
     const text = $(elem).text().trim();
     if (text.length > 100) {
       const ratio = getTextToTagRatio(elem, $);
@@ -323,9 +103,7 @@ export function findBestContentRoot($, selector = 'auto') {
     }
   });
 
-  if (bestDiv) {
-    return $(bestDiv);
-  }
+  if (bestDiv) return $(bestDiv);
 
   // Priority 5: body
   return $('body').first();
@@ -359,20 +137,18 @@ export function extractMetadata($, url) {
     url,
     scraped_at: new Date().toISOString(),
     description,
-    date: date ? date.split('T')[0] : null // Keep YYYY-MM-DD if ISO
+    date: date ? date.split('T')[0] : null
   };
 }
 
 /**
- * Converts a Cheerio element to Markdown using cached global instances.
+ * Converts a Cheerio element to Markdown.
  * @param {object} rootElement 
  * @param {object} options 
  * @returns {string}
  */
 export function convertToMarkdown(rootElement, options = {}) {
-  const service = options.images ? turndownServiceStandard : turndownServiceNoImages;
-  const html = rootElement.html() || '';
-  return service.turndown(html);
+  return MarkdownEngine.convert(rootElement, options);
 }
 
 /**
@@ -385,14 +161,11 @@ export function resolveUrls($, baseUrl) {
     const href = $(elem).attr('href');
     if (href) {
       try {
-        // Skip links that are anchor jumps, mailto, tel, or javascript
         if (href.startsWith('#') || href.startsWith('mailto:') || href.startsWith('tel:') || href.startsWith('javascript:')) {
           return;
         }
         $(elem).attr('href', new URL(href, baseUrl).href);
-      } catch (e) {
-        // Keep original if resolution fails
-      }
+      } catch (e) {}
     }
   });
 
@@ -401,39 +174,25 @@ export function resolveUrls($, baseUrl) {
     if (src) {
       try {
         $(elem).attr('src', new URL(src, baseUrl).href);
-      } catch (e) {
-        // Keep original if resolution fails
-      }
+      } catch (e) {}
     }
   });
 }
 
 /**
- * Orchestrates the full scraping process.
+ * Orchestrates the full scraping process using Scrapi's modular engine.
  * @param {string} url 
  * @param {object} options 
  * @returns {Promise<object>}
  */
 export async function scrapePage(url, options = {}) {
-  const html = await fetchHtml(url, options);
+  const response = await globalFetcherPool.fetch(url, options);
   
-  // Fast string-based DOM stripping to prevent Cheerio memory bloat
-  const strippedHtml = html
-    .replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, '')
-    .replace(/<style\b[^<]*(?:(?!<\/style>)<[^<]*)*<\/style>/gi, '')
-    .replace(/<svg\b[^<]*(?:(?!<\/svg>)<[^<]*)*<\/svg>/gi, '');
-
-  const $ = cheerio.load(strippedHtml);
-  
+  const $ = response.$;
   const metadata = extractMetadata($, url);
-  
-  // Clean elements from the page
   cleanDom($);
-
-  // Resolve relative URLs to absolute
   resolveUrls($, url);
   
-  // Find the content we care about
   const contentRoot = findBestContentRoot($, options.selector);
   
   const mediaToDownload = [];
@@ -444,28 +203,19 @@ export async function scrapePage(url, options = {}) {
         try {
           const u = new URL(src);
           let ext = path.extname(u.pathname);
-          if (!ext || ext.length > 5) ext = '.jpg'; // Fallback
-          // Clean base name and truncate if too long
+          if (!ext || ext.length > 5) ext = '.jpg';
           let basename = path.basename(u.pathname, ext).replace(/[^a-zA-Z0-9_-]/g, '') || 'image';
           if (basename.length > 50) basename = basename.substring(0, 50);
           
           const filename = `${basename}_${Date.now()}_${Math.floor(Math.random() * 1000)}${ext}`;
-          
           mediaToDownload.push({ url: src, filename });
-          
-          // Use relative path for Markdown output
           $(elem).attr('src', `media/${filename}`);
-        } catch (e) {
-          // Ignore invalid URLs
-        }
+        } catch (e) {}
       }
     });
   }
   
-  // Convert content to Markdown
   const markdown = convertToMarkdown(contentRoot, options);
-
-  // Compute Word Count
   const words = contentRoot.text().trim().split(/\s+/).filter(w => w.length > 0);
   metadata.word_count = words.length;
 
@@ -494,30 +244,21 @@ export async function discoverCategories(url) {
 
   const categoryMap = new Map();
 
-  // Target common navigation structures
   $('nav a, .menu a, #menu a, header a, .categories a, footer a').each((_, elem) => {
     const el = $(elem);
     let href = el.attr('href');
     let name = el.text().trim();
     
     if (!href || !name || name.length < 2 || name.length > 30) return;
-    
-    // Ignore images inside a tags if no text
-    if (!name) return;
 
     try {
       if (href.startsWith('#') || href.startsWith('mailto:') || href.startsWith('tel:') || href.startsWith('javascript:')) {
         return;
       }
       const absoluteUrl = new URL(href, url).href;
-      
-      // Only keep same-origin
       if (new URL(absoluteUrl).origin !== origin) return;
       
-      // Remove trailing slash for deduplication
       const cleanUrl = absoluteUrl.replace(/\/$/, '');
-      
-      // Filter out common non-categories
       const lowerUrl = cleanUrl.toLowerCase();
       if (
         lowerUrl.includes('/login') || 
@@ -536,13 +277,7 @@ export async function discoverCategories(url) {
     } catch (e) {}
   });
 
-  const categories = Array.from(categoryMap.entries()).map(([href, name]) => ({
-    url: href,
-    name
-  }));
-
-  // If we found very few from navigation, maybe we fall back to all links that have "category" in path?
-  if (categories.length < 2) {
+  if (categoryMap.size < 2) {
     $('a').each((_, elem) => {
       const el = $(elem);
       let href = el.attr('href');
@@ -559,13 +294,12 @@ export async function discoverCategories(url) {
         }
       } catch (e) {}
     });
-    return Array.from(categoryMap.entries()).map(([href, name]) => ({
-      url: href,
-      name
-    }));
   }
 
-  return categories;
+  return Array.from(categoryMap.entries()).map(([href, name]) => ({
+    url: href,
+    name
+  }));
 }
 
 /**
@@ -584,7 +318,6 @@ export async function autoDetectLinkSelector(url) {
     return null;
   }
 
-  // Remove common noise areas to focus on main content links
   $('nav, header, footer, aside, .sidebar, .widget, .comments').remove();
 
   const signatureCounts = new Map();
@@ -597,11 +330,7 @@ export async function autoDetectLinkSelector(url) {
     try {
       if (href.startsWith('#') || href.startsWith('javascript:') || href.startsWith('mailto:')) return;
       const absoluteUrl = new URL(href, url).href;
-      
-      // Must be same origin
       if (new URL(absoluteUrl).origin !== origin) return;
-      
-      // Ignore pagination/category links if possible
       if (absoluteUrl.includes('/category/') || absoluteUrl.includes('/page/') || absoluteUrl.includes('/tag/')) return;
 
       const aClasses = (el.attr('class') || '').trim().split(/\s+/).filter(c => c && /^[a-zA-Z0-9_-]+$/.test(c)).slice(0, 2).join('.');
@@ -630,7 +359,6 @@ export async function autoDetectLinkSelector(url) {
 
   if (signatureCounts.size === 0) return null;
 
-  // Find the signature with the most occurrences (likely the list of posts)
   let bestSelector = null;
   let maxCount = 0;
 
@@ -641,7 +369,6 @@ export async function autoDetectLinkSelector(url) {
     }
   }
 
-  // If the best selector only appeared once, it's not a list
   if (maxCount < 2) return null;
 
   return bestSelector;
