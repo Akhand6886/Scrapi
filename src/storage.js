@@ -380,6 +380,19 @@ export function deleteSpiderCheckpoint(jobId) {
   stmt.run(jobId);
 }
 
+export function getAllSpiderCheckpoints() {
+  if (!db) return [];
+  const stmt = db.prepare(`SELECT job_id, seed_url, state, updated_at FROM spider_checkpoints ORDER BY updated_at DESC`);
+  const rows = stmt.all();
+  return rows.map(row => {
+    try {
+      return { ...row, state: JSON.parse(row.state) };
+    } catch (e) {
+      return row;
+    }
+  });
+}
+
 /**
  * Adaptive element fingerprint persistence.
  */
@@ -404,6 +417,31 @@ export function getElementFingerprint(domain, name) {
     return { ...row, signature: JSON.parse(row.signature) };
   }
   return null;
+}
+
+export function getAllElementFingerprints(domain = null) {
+  if (!db) return [];
+  let rows = [];
+  if (domain) {
+    const stmt = db.prepare(`SELECT * FROM element_fingerprints WHERE domain = ? ORDER BY updated_at DESC`);
+    rows = stmt.all(domain);
+  } else {
+    const stmt = db.prepare(`SELECT * FROM element_fingerprints ORDER BY updated_at DESC`);
+    rows = stmt.all();
+  }
+  return rows.map(row => {
+    try {
+      return { ...row, signature: JSON.parse(row.signature) };
+    } catch (e) {
+      return row;
+    }
+  });
+}
+
+export function deleteElementFingerprint(id) {
+  if (!db) return;
+  const stmt = db.prepare(`DELETE FROM element_fingerprints WHERE id = ?`);
+  stmt.run(id);
 }
 
 /**
