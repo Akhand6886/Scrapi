@@ -60,12 +60,16 @@ node src/cli.js spider https://example.com -m 50 --concurrency 3 --delay 1000
 
 ---
 
-## 🖥️ Web Console Integration
+## 🖥️ Web Console Integration (v2.0)
 
-The Visual Web Console provides a dedicated control tab for spider jobs:
+The Visual Web Console provides a dedicated control tab for spider jobs with full **Scrapi v2.0** engine integration:
 
 1. **Tab Selector**: Toggle the sidebar selector mode to **🕸️ Spider**.
-2. **Parameters Panel**: Configure Crawl Depth, Max Page Budget, Concurrency, and Rate Limit Delay.
-3. **Crawl Statistics**: Real-time stats showing visited pages, remaining queue, succeeded pages, and failed pages.
-4. **Live Scroll Logs**: A scrollable log terminal output reflecting crawler operations dynamically.
-5. **Abort Signal**: A **Cancel Spider Crawl** button to gracefully terminate background workers instantly.
+2. **Multi-Tier Fetcher**: Run the spider using **⚡ Static** (fast connection pooling), **🌐 Dynamic** (Playwright SPA rendering), or **🛡️ Stealth** (anti-bot evasion & Turnstile bypass).
+3. **Parameters Panel**: Configure Crawl Depth, Max Page Budget, Concurrency, and Rate Limit Delay.
+4. **Pause & Checkpoint State**: Pause an ongoing crawl at any time with **⏸️ Pause & Save**. The crawl engine saves the frontier queue, visited set, and file map to SQLite.
+5. **Resume Drawer**: One-click resume for interrupted or paused spider jobs directly from the **Saved Checkpoints** panel.
+6. **Live Stream of Crawled Pages**: A dedicated real-time list of newly scraped pages displaying filename, timestamp, and instant preview link.
+7. **Crawl Statistics**: Real-time stats showing visited pages, remaining queue, succeeded pages, and failed pages.
+8. **Live Scroll Logs**: A scrollable log terminal output reflecting crawler operations dynamically.
+9. **Interactive REPL & Adaptive Studio**: Switch to the **🧪 Live Query & REPL** or **🎯 Adaptive Studio** tabs to test CSS/XPath queries and evaluate self-healing element fingerprints.
