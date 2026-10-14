@@ -23,6 +23,7 @@ import { runSpider } from './spider.js';
 import { startShell } from './cli/shell.js';
 import { MCPServer } from './mcp/server.js';
 import { globalFetcherPool } from './fetchers/index.js';
+import { runBenchmarks } from './benchmark/index.js';
 
 const program = new Command();
 
@@ -606,6 +607,26 @@ program
       console.log(chalk.red(`   Failed/Error Pages:   ${stats.failed}\n`));
     } catch (err) {
       handleError(err, spinner);
+    }
+  });
+
+// Benchmark command
+program
+  .command('benchmark')
+  .description('Run automated performance, throughput, and anti-bot evasion benchmark suite')
+  .option('-s, --suite <name>', 'Benchmark suite to run: all, parser, fetcher, memory, or stealth', 'all')
+  .option('--no-report', 'Skip writing docs/benchmarks.md report document', false)
+  .option('-i, --iterations <number>', 'Number of parser iterations', '500')
+  .action(async (options) => {
+    try {
+      await runBenchmarks({
+        suite: options.suite,
+        report: options.report !== false,
+        iterations: parseInt(options.iterations, 10) || 500
+      });
+    } catch (err) {
+      console.error(chalk.red(`Benchmark failed: ${err.message}`));
+      process.exit(1);
     }
   });
 
