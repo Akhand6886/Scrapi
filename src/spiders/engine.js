@@ -282,11 +282,18 @@ export class CrawlEngine {
 
     await Promise.all(workerPromises);
 
-    if (this.jobId) {
-      deleteSpiderCheckpoint(this.jobId);
+    if (this.aborted || this.options.aborted) {
+      if (this.jobId) {
+        this.saveCheckpoint(seedUrl);
+      }
+      logMessage(`⏸️ Spider paused / stopped. Checkpoint preserved for resume (Job ID: ${this.jobId || 'default'}).`);
+    } else {
+      if (this.jobId) {
+        deleteSpiderCheckpoint(this.jobId);
+      }
+      logMessage(`🏁 Spider complete! ${this.succeeded} pages successfully scraped, ${this.failed} failed.`);
     }
 
-    logMessage(`🏁 Spider complete! ${this.succeeded} pages successfully scraped, ${this.failed} failed.`);
     return { visited: this.visited.size, succeeded: this.succeeded, failed: this.failed };
   }
 }
