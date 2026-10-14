@@ -63,8 +63,26 @@ export async function initStorage(dbDir = './data', outputDir = './output') {
       cached_at DATETIME NOT NULL
     );
 
+    CREATE TABLE IF NOT EXISTS spider_checkpoints (
+      job_id TEXT PRIMARY KEY,
+      seed_url TEXT NOT NULL,
+      state TEXT NOT NULL, -- JSON string containing visited, queue, stats, options
+      updated_at DATETIME NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS element_fingerprints (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      domain TEXT NOT NULL,
+      name TEXT NOT NULL,
+      signature TEXT NOT NULL, -- JSON string
+      confidence REAL DEFAULT 1.0,
+      updated_at DATETIME NOT NULL,
+      UNIQUE(domain, name)
+    );
+
     CREATE INDEX IF NOT EXISTS idx_scrapes_category ON scrapes(category);
     CREATE INDEX IF NOT EXISTS idx_scrapes_scraped_at ON scrapes(scraped_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_fingerprints_domain ON element_fingerprints(domain);
   `);
 
   // Migration: Add category column if it does not exist in scrapes table
@@ -332,6 +350,63 @@ export function saveCachedPage(url, html, etag, lastModified) {
 }
 
 /**
+ * Spider checkpoint state persistence for pause / resume.
+ */
+export function saveSpiderCheckpoint(jobId, seedUrl, state) {
+  if (!db) return;
+  const stmt = db.prepare(`
+    INSERT INTO spider_checkpoints (job_id, seed_url, state, updated_at)
+    VALUES (?, ?, ?, ?)
+    ON CONFLICT(job_id) DO UPDATE SET
+      state = excluded.state,
+      updated_at = excluded.updated_at
+  `);
+  stmt.run(jobId, seedUrl, JSON.stringify(state), new Date().toISOString());
+}
+
+export function getSpiderCheckpoint(jobId) {
+  if (!db) return null;
+  const stmt = db.prepare(`SELECT * FROM spider_checkpoints WHERE job_id = ?`);
+  const row = stmt.get(jobId);
+  if (row && row.state) {
+    return { ...row, state: JSON.parse(row.state) };
+  }
+  return null;
+}
+
+export function deleteSpiderCheckpoint(jobId) {
+  if (!db) return;
+  const stmt = db.prepare(`DELETE FROM spider_checkpoints WHERE job_id = ?`);
+  stmt.run(jobId);
+}
+
+/**
+ * Adaptive element fingerprint persistence.
+ */
+export function saveElementFingerprint(domain, name, signature, confidence = 1.0) {
+  if (!db) return;
+  const stmt = db.prepare(`
+    INSERT INTO element_fingerprints (domain, name, signature, confidence, updated_at)
+    VALUES (?, ?, ?, ?, ?)
+    ON CONFLICT(domain, name) DO UPDATE SET
+      signature = excluded.signature,
+      confidence = excluded.confidence,
+      updated_at = excluded.updated_at
+  `);
+  stmt.run(domain, name, JSON.stringify(signature), confidence, new Date().toISOString());
+}
+
+export function getElementFingerprint(domain, name) {
+  if (!db) return null;
+  const stmt = db.prepare(`SELECT * FROM element_fingerprints WHERE domain = ? AND name = ?`);
+  const row = stmt.get(domain, name);
+  if (row && row.signature) {
+    return { ...row, signature: JSON.parse(row.signature) };
+  }
+  return null;
+}
+
+/**
  * Retrieves cached LLM extraction result by content hash.
  * @param {string} hash 
  * @returns {object|null}
@@ -382,7 +457,6 @@ export function saveLlmCache(hash, schemaName, instruction, result) {
 export async function downloadMediaFiles(mediaList, markdownFilePath, baseOutputDir = './output') {
   if (!mediaList || mediaList.length === 0) return;
   
-  // markdownFilePath is relative to baseOutputDir or absolute.
   const absoluteMarkdownDir = path.resolve(baseOutputDir, path.dirname(markdownFilePath));
   const mediaDir = path.join(absoluteMarkdownDir, 'media');
   
