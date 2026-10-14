@@ -1,185 +1,150 @@
-# 🕷️ WebScraper (Scrapi)
+# 🕷️ Scrapi (v2.0 - Scrapling Engine Architecture)
 
-A terminal-first, developer-grade web scraping tool built in Node.js. It extracts clean Markdown from web pages, logs scrape metadata to a SQLite database, supports visual scraping profiles, and leverages Anthropic Claude for smart content structuring.
-
----
-
-## 🛠️ Features
-
-### Phase 1: Terminal CLI (Complete)
-- **High-Fidelity DOM Cleaning**: Strips banners, ads, headers, footers, popups, scripts, and styling to target only relevant content.
-- **Smart Content Detection**: Automatically detects article or main body containers using text-to-tag heuristics.
-- **Markdown Conversion**: Uses Turndown to produce clean, formatted Markdown files.
-- **Metadata Logging**: Records URL, status, word count, filename, and timestamps in a local SQLite database.
-- **Subcommands**:
-  - `scrape <url>`: Scrape a single URL.
-  - `batch <file>`: Process multiple URLs listed in a text file.
-  - `spider <url>`: Recursively crawl and scrape an entire website under the same origin.
-  - `list`: Show database history of past scrapes.
-  - `show <id>`: Print Markdown content of a past scrape from DB.
-  - `export <id>`: Re-export scraped Markdown to a custom output path.
-
-### Phase 2: Interactive UI (Complete)
-- **Local React Visual Console**: Beautiful dark-mode interface with element hover highlighting and click-to-select CSS selector generation.
-- **Dual-Mode Hybrid Proxy**: Static render mode via Axios for instant preview frames (<100ms), falling back to Playwright only for dynamic/JS rendering.
-- **Lag-Free Visual Selection**: 50ms debounced pointer events and caching on target DOM trees to avoid visual picker reflow lag.
-- **Visual Scraping Profiles**: Save config as a named profile to SQLite, and execute it from terminal: `scrape --profile <name> <url>`.
-- **Batch Scraping Enhancements**: 
-  - **Category Sync**: Automatically discover and sync navigation categories from any target website into 1-click batch scrapers.
-  - **Auto-Detect Link Selector**: One-click "🪄 Auto" heuristic scanner that mathematically determines the CSS selector for the dominant article/post feed on a page.
-- **Media Downloading**: Automatically extract `<img>` tags, download assets locally into a `media/` subdirectory, and rewrite markdown paths to support full offline viewing.
-
-### Phase 3: LLM Intelligence (Complete)
-- **Structured JSON Extraction**: Convert Markdown to schema-validated JSON using Anthropic Claude or Local LLM.
-- **Predefined Zod Schemas**: Support for `article`, `product`, `event`, and `contact` models.
-- **Smart Result Caching**: Caches LLM parsing runs based on input SHA-256 hash to prevent redundant paid API calls.
-- **Offline Fallbacks**: Automatically falls back to rule-based heuristic extraction patterns if API keys or endpoints are unavailable.
-- **Auto-Summarization & Batch Grouping**: Multi-page grouping index maps URLs dynamically.
-- **Crawl & Category Scraping**: Discover links on listing/index pages, scrape nested pages concurrently, tag them with database categories, and write files in hierarchical subdirectories (e.g. `./output/<category>/`).
+An ultra-fast, adaptive, developer-grade web scraping and crawling framework in Node.js, re-architected with inspiration from [D4Vinci/Scrapling](https://github.com/D4Vinci/Scrapling).
 
 ---
 
-## 🚀 Installation & Setup
+## 🏛️ Scrapi v2.0 Architecture
 
-1. **Install Dependencies**:
-   ```bash
-   npm install
-   ```
-2. **Make the CLI Executable**:
-   ```bash
-   chmod +x src/cli.js
-   ```
-3. **Start the Visual Web Console UI**:
-   ```bash
-   node src/ui/server.js
-   ```
-   This boots the server on `http://localhost:3001` and initializes the shared headless browser. Open `http://localhost:3001` in your web browser to access the interactive selector and dashboard.
+Scrapi is structured into 4 decoupled, high-performance subsystems:
 
----
-
-## 📖 Usage Examples
-
-### Scrape a Page (Save to Output Folder)
-```bash
-node src/cli.js scrape https://example.com
-```
-
-### Scrape & Print to Terminal (Skip DB Insert)
-```bash
-node src/cli.js scrape https://example.com --print --no-db
-```
-
-### Scrape with Custom Filename and Selector
-```bash
-node src/cli.js scrape https://news.ycombinator.com -s "table.itemlist" -f hn-home
-```
-
-### Scrape with Image Alt-Text Enabled
-```bash
-node src/cli.js scrape https://example.com --images
-```
-
-### Scrape and Download Local Media Copies
-Automatically download images into a `./output/media/` folder and rewrite markdown paths:
-```bash
-node src/cli.js scrape https://example.com --images --download-media
-```
-
-### Run Batch Scrapes
-Create a `urls.txt` file (one URL per line) and run:
-```bash
-node src/cli.js batch urls.txt
-```
-
-### Run Batch Scrapes with Custom Concurrency (Parallel Workers)
-```bash
-node src/cli.js batch urls.txt --concurrency 4
-```
-
-### View Scrape History
-```bash
-node src/cli.js list
-```
-
-### Show Saved Scrape Markdown Content
-```bash
-node src/cli.js show <scrape-id>
-```
-
-### Re-export past Scrape
-```bash
-node src/cli.js export <scrape-id> -d ./custom-folder/my-scraped-file.md
-```
-
-### Crawl and Scrape Nested Links
-Extract anchor links matching a CSS selector on an index/list page and scrape them in parallel under a custom category:
-```bash
-node src/cli.js crawl https://news.ycombinator.com -s ".titleline > a" --category TechNews --concurrency 3
-```
-
-### Scrape and Tag with a Category
-Save output in `./output/blog/` and log in SQLite under the category tag:
-```bash
-node src/cli.js scrape https://example.com/blog-post-1 --category blog
-```
-
-### Filter Scrapes List by Category
-```bash
-node src/cli.js list --category TechNews
-```
-
-### Spider and Crawl an Entire Website Recursively
-Traverse internal links and save them using directory structures matching the site layout:
-```bash
-node src/cli.js spider https://example.com --max-pages 50 --concurrency 3 --delay 1000
+```mermaid
+graph TD
+    CLI["CLI / Interactive Shell / MCP Server"] --> Core["Core Engine"]
+    UI["Web Dashboard & Visual Picker"] --> Core
+    
+    subgraph "Fetcher Subsystem (Progressive Multi-Tier)"
+        Core --> FetcherPool["FetcherPool"]
+        FetcherPool --> StaticFetcher["StaticFetcher (TLS headers, HTTP Keep-Alive, Caching)"]
+        FetcherPool --> DynamicFetcher["DynamicFetcher (Playwright JS SPA Rendering)"]
+        FetcherPool --> StealthFetcher["StealthyFetcher (Anti-Bot Evasion & Cloudflare Turnstile)"]
+    end
+    
+    subgraph "Adaptive Parser Subsystem"
+        StaticFetcher --> Response["Response / Adaptor"]
+        DynamicFetcher --> Response
+        StealthFetcher --> Response
+        Response --> Selector["Selector & AdaptorElement (CSS/XPath/Regex)"]
+        Selector --> AdaptiveEngine["AdaptiveEngine (Self-Healing DOM Fingerprints)"]
+        Selector --> MarkdownEngine["MarkdownEngine (GFM Tables, Code Blocks, Media)"]
+    end
+    
+    subgraph "Spider & Crawling Engine"
+        Core --> CrawlEngine["CrawlEngine & Spider Base Class"]
+        CrawlEngine --> URLFilter["Frontier Queue & URL Deduplication"]
+        CrawlEngine --> Checkpoints["Checkpoints (SQLite Pause/Resume) & Throttler"]
+    end
+    
+    subgraph "AI & Storage Subsystem"
+        AdaptiveEngine --> SQLite["SQLite Database (History, Signatures, Checkpoints)"]
+        Checkpoints --> SQLite
+        Core --> MCPServer["Model Context Protocol (MCP) Server for AI Agents"]
+    end
 ```
 
 ---
 
-## 🗄️ Database Schema (`data/scrapes.db`)
+## 🚀 Key Capabilities
 
-Scrapes are logged using the following schema:
-- `id` (INTEGER, PK): Unique scrape reference.
-- `url` (TEXT): Src URL.
-- `title` (TEXT): Page `<title>` or OG equivalent.
-- `description` (TEXT): Page meta description.
-- `filename` (TEXT): Saved Markdown filename in `./output`.
-- `word_count` (INTEGER): Words in extracted content.
-- `scraped_at` (DATETIME): UTC timestamp.
-- `status` (TEXT): `success` or `failed`.
-- `error` (TEXT): Exception details if scraping failed.
+### 1. Progressive Multi-Tier Fetchers
+- **`StaticFetcher`**: Ultra-fast HTTP client using connection pooling, TLS-like headers, automatic gzip/brotli decompression, conditional ETag/304 HTTP caching, and exponential backoff retry.
+- **`DynamicFetcher`**: Playwright headless browser client for rendering dynamic JavaScript single-page apps (SPAs), selector waiting, and auto-scrolling.
+- **`StealthyFetcher`**: Anti-bot evasion engine that masks `navigator.webdriver`, simulates Chrome runtime, handles permissions queries, injects canvas noise, and automates Cloudflare Turnstile challenge solving.
 
+### 2. Adaptive Self-Healing Parser & Fluent Selectors
+- **Unified `Response` Adaptor**: Every fetcher returns a consistent `Response` object with `.css()`, `.xpath()`, `.toMarkdown()`, `.extractMetadata()`, and `.json()`.
+- **Self-Healing DOM Fingerprints**: When website redesigns break CSS selectors, the `AdaptiveEngine` uses multi-anchor similarity algorithms (structural paths, tag hierarchies, text snippets, class frequencies) to automatically relocate the intended element.
 
+### 3. Scrapy-like Spider Framework & Checkpoints
+- **Concurrent Crawl Engine**: Async crawling loop with link frontier queues, URL deduplication, depth budgeting, and auto-throttling.
+- **Pause & Resume Checkpoints**: Saves crawl state to SQLite so large site crawls can be stopped and resumed seamlessly (`--resume`).
 
-## 📅 1-Week Sprint Tasks Progress
+### 4. Interactive REPL Shell (`scrapi shell`)
+- Test CSS selectors, XPath queries, and markdown extraction live in a Node.js REPL console.
 
-- [x] **Day 1: Setup & Scraper Core**
-  - [x] Initialize workspace, create `package.json` with ESM, install dependencies
-  - [x] Create `scraper.js` core fetching logic with Axios
-  - [x] Create HTML DOM cleaning logic using Cheerio
-  - [x] Implement smart content root detection fallbacks
-  - [x] Convert HTML to clean Markdown with Turndown
-- [x] **Day 2: DB Layer & CLI Commands**
-  - [x] Initialize SQLite database schema (`scrapes` and `profiles` tables) in `storage.js`
-  - [x] Implement query/insert database helper methods
-  - [x] Implement CLI entry point in `cli.js` with Commander.js
-  - [x] Add subcommands: `scrape`, `batch`, `list`, `show`, `export`
-- [x] **Day 3: Express & Playwright Server**
-  - [x] Install Playwright and set up browser launcher
-  - [x] Implement local Express backend bridge in `ui/server.js`
-  - [x] Implement endpoint to serve target page contents
-- [x] **Day 4: React UI & Selector Gen**
-  - [x] Build element highlighting picker dashboard (`index.html` and `picker.js`)
-  - [x] Integrate visual click-to-selector generation
-  - [x] Connect profile saving from UI to SQLite and support in CLI `scrape --profile <name>`
-- [x] **Day 5: LLM API & Zod Validation**
-  - [x] Integrate Anthropic SDK / Local LLM / Rule-based fallback in `llm.js`
-  - [x] Define Zod validation schemas (`article`, `product`, `event`, `contact`)
-  - [x] Connect CLI flags for LLM processing (`--llm`, `--extract`, `--summarize`, `--schema`)
-- [x] **Day 6: Grouping, Categorization & Testing**
-  - [x] Implement batch categorization and grouping logic (`--group`)
-  - [x] Run manual integration tests on 10+ real-world URLs
-- [x] **Day 7: Documentation & Polish**
-  - [x] Write user guide in `README.md`
-  - [x] Final visual design adjustments and error boundary checks
-  - [x] Create walkthrough and architecture documentation
+### 5. Built-in Model Context Protocol (MCP) Server (`scrapi mcp`)
+- Exposes tools (`scrapi_fetch`, `scrapi_extract`, `scrapi_adaptive_query`, `scrapi_crawl`) over JSON-RPC stdio for AI coding assistants like Claude, Cursor, and Antigravity.
+
+---
+
+## 💻 CLI Commands
+
+### 1. Scrape with Multi-Tier Fetchers
+```bash
+# High-speed static fetch
+node src/cli.js scrape https://example.com --fetcher static
+
+# Dynamic JavaScript rendering (Playwright)
+node src/cli.js scrape https://example.com --fetcher dynamic
+
+# Stealth anti-bot bypass mode
+node src/cli.js scrape https://example.com --fetcher stealth
+
+# Scrape with custom selector and local media download
+node src/cli.js scrape https://example.com -s "article" --download-media
+```
+
+### 2. Interactive Scraper Shell (REPL)
+```bash
+node src/cli.js shell https://example.com
+```
+Inside the shell:
+```javascript
+// Test CSS queries
+response.css('h1').texts
+
+// Test XPath queries
+response.xpath('//a').cleanTexts
+
+// Convert to clean Markdown
+response.toMarkdown()
+```
+
+### 3. MCP Server for AI Integration
+```bash
+node src/cli.js mcp
+```
+
+### 4. Recursive Site Spider with Checkpoints
+```bash
+node src/cli.js spider https://example.com -d 3 -m 50 -c 4 --delay 500
+
+# Resume a previous crawl
+node src/cli.js spider https://example.com --resume example.com-spider
+```
+
+### 5. Category-Targeted Crawling
+```bash
+node src/cli.js crawl https://example.com -s "div.post-card a" --category blog
+```
+
+### 6. Web Dashboard UI
+```bash
+node src/cli.js serve --port 3000
+```
+
+---
+
+## 🧪 Programmatic Node.js API
+
+```javascript
+import { fetch, fetchDynamic, fetchStealth, SelectorList, AdaptiveEngine } from 'scrapi';
+
+// Fetch a web page
+const response = await fetch('https://example.com');
+
+// CSS & XPath queries
+const title = response.css('h1').first().cleanText;
+const links = response.xpath('//a').attribs('href');
+
+// Convert to GFM Markdown
+const { markdown, metadata } = response.toMarkdown();
+
+// Self-healing adaptive query
+const healed = response.adaptive({
+  tagName: 'article',
+  textSnippet: 'Important news item',
+  classes: ['post-entry']
+});
+console.log('Target element:', healed.element.text);
+```
