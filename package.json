@@ -1,7 +1,7 @@
 {
   "name": "scrapi",
-  "version": "1.0.0",
-  "description": "A terminal-first, developer-grade web scraping tool",
+  "version": "2.0.0",
+  "description": "An adaptive, ultra-fast web scraping and crawling framework",
   "type": "module",
   "main": "src/cli.js",
   "scripts": {
