@@ -8,6 +8,7 @@ import {
   getSpiderCheckpoint, 
   deleteSpiderCheckpoint 
 } from '../storage.js';
+import { prioritizeUrl } from '../trees/crawl_prioritizer.js';
 
 /**
  * CrawlEngine coordinates asynchronous crawling, rate limiting, and state checkpoints.
@@ -228,14 +229,26 @@ export class CrawlEngine {
           this.succeeded++;
           logMessage(`✓ Success: Scraped and saved to ${finalFilename}`);
 
-          // Discover and enqueue same-origin links
+          // Discover and enqueue same-origin links using CrawlPriorityTree
           if (item.depth < this.maxDepth) {
             const links = response.css('a').attribs('href');
+            let addedAny = false;
             for (const href of links) {
               const resolvedUrl = this.cleanUrl(href);
               if (resolvedUrl && this.isAllowedUrl(resolvedUrl) && !this.visited.has(resolvedUrl) && !this.queue.some(q => q.url === resolvedUrl)) {
-                this.queue.push({ url: resolvedUrl, depth: item.depth + 1 });
+                const priorityInfo = prioritizeUrl(resolvedUrl);
+                if (priorityInfo.classification !== 'DISCARD') {
+                  this.queue.push({ 
+                    url: resolvedUrl, 
+                    depth: item.depth + 1,
+                    priority: priorityInfo.priorityRank 
+                  });
+                  addedAny = true;
+                }
               }
+            }
+            if (addedAny && this.queue.length > 1) {
+              this.queue.sort((a, b) => (b.priority || 0) - (a.priority || 0));
             }
           }
 
