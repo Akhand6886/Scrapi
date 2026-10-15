@@ -4,6 +4,7 @@ import { promisify } from 'util';
 const execAsync = promisify(exec);
 
 const testFiles = [
+  'test_latest_methods.js',
   'test_decision_tree.js',
   'test_scrapling_arch.js',
   'test_spider.js',
