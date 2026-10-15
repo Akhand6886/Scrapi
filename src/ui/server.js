@@ -112,7 +112,7 @@ app.post('/api/discover', async (req, res) => {
     return res.status(400).json({ error: 'Missing url or selector' });
   }
 
-  const renderMode = mode || 'static';
+  const renderMode = mode || 'auto';
   try {
     const response = await globalFetcherPool.fetch(url, {
       fetcher: renderMode,
@@ -143,7 +143,7 @@ app.post('/api/discover', async (req, res) => {
 // GET proxy: Load page via multi-tier FetcherPool (static, dynamic, stealth) and inject picker script
 app.get('/api/proxy', async (req, res) => {
   const targetUrl = req.query.url;
-  const mode = req.query.mode || 'static';
+  const mode = req.query.mode || 'auto';
 
   if (!targetUrl) {
     return res.status(400).send('Missing url parameter');
@@ -241,7 +241,7 @@ app.post('/api/scrape', async (req, res) => {
       selector, 
       images, 
       downloadMedia,
-      fetcher: fetcher || 'static'
+      fetcher: fetcher || 'auto'
     });
     const filename = await saveMarkdownFile(result.markdown, result.metadata, { noMeta, category });
     
@@ -261,7 +261,13 @@ app.post('/api/scrape', async (req, res) => {
       category: category || null
     };
     insertScrape(record);
-    res.json({ success: true, filename, markdown: result.markdown, timing: result.timing });
+    res.json({ 
+      success: true, 
+      filename, 
+      markdown: result.markdown, 
+      timing: result.timing,
+      decisionTree: result.decisionTree || null
+    });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -437,7 +443,7 @@ app.post('/api/adaptive/test', async (req, res) => {
   }
   try {
     const response = await globalFetcherPool.fetch(url, {
-      fetcher: mode || 'static',
+      fetcher: mode || 'auto',
       timeout: 15000
     });
 
@@ -469,7 +475,7 @@ app.post('/api/query', async (req, res) => {
   const startTime = Date.now();
   try {
     const response = await globalFetcherPool.fetch(url, {
-      fetcher: mode || 'static',
+      fetcher: mode || 'auto',
       timeout: 20000
     });
 
