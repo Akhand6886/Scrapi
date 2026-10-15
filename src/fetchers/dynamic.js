@@ -16,6 +16,22 @@ function resetIdleTimer() {
       sharedBrowser = null;
     }
   }, BROWSER_IDLE_TIMEOUT);
+  if (idleTimer && typeof idleTimer.unref === 'function') {
+    idleTimer.unref();
+  }
+}
+
+export async function closeSharedBrowser() {
+  if (idleTimer) {
+    clearTimeout(idleTimer);
+    idleTimer = null;
+  }
+  if (sharedBrowser) {
+    try {
+      await sharedBrowser.close();
+    } catch (e) {}
+    sharedBrowser = null;
+  }
 }
 
 async function getBrowser(headless = true) {
