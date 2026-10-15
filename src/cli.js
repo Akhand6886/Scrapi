@@ -21,9 +21,10 @@ import {
 import { extractData, summarizeContent, groupScrapes } from './llm.js';
 import { runSpider } from './spider.js';
 import { startShell } from './cli/shell.js';
-import { MCPServer } from './mcp/server.js';
 import { globalFetcherPool } from './fetchers/index.js';
 import { runBenchmarks } from './benchmark/index.js';
+import { extractEntities } from './parser/cluster_extractor.js';
+import { globalBandit } from './trees/bandit.js';
 
 const program = new Command();
 
@@ -640,4 +641,75 @@ program
     }
   });
 
+// Unsupervised Entity Extraction Command
+program
+  .command('entities <url>')
+  .description('Unsupervised structural extraction of repeating collections (products, cards, listings)')
+  .option('-f, --fetcher <type>', 'Fetcher engine: auto, static, dynamic, stealth', 'auto')
+  .option('-l, --limit <number>', 'Maximum entities to return', '50')
+  .option('-j, --json', 'Output raw JSON result', false)
+  .action(async (url, options) => {
+    const spinner = ora(`Mining entities from ${chalk.cyan(url)}...`).start();
+    try {
+      await initStorage();
+      const response = await globalFetcherPool.fetch(url, { fetcher: options.fetcher });
+      const $ = cheerio.load(response.rawHtml || response.html || '');
+      const limit = parseInt(options.limit, 10) || 50;
+
+      const result = extractEntities($, { baseUrl: url, limit });
+      spinner.succeed(chalk.green(`Extracted ${result.entities.length} items (Archetype: ${result.detectedType.toUpperCase()}, Confidence: ${Math.round(result.confidence * 100)}%)`));
+
+      if (options.json) {
+        console.log(JSON.stringify(result, null, 2));
+      } else {
+        console.log(chalk.bold(`\n📦 Discovered Repeating Entities (${result.detectedType.toUpperCase()}):`));
+        result.entities.forEach((item, idx) => {
+          console.log(chalk.cyan(`\n  [${idx + 1}] ${item.title || '(Untitled item)'}`));
+          if (item.price) console.log(chalk.green(`      Price: ${item.price}`));
+          if (item.url) console.log(chalk.gray(`      URL:   ${item.url}`));
+          if (item.badge) console.log(chalk.yellow(`      Badge: [${item.badge}]`));
+          if (item.date) console.log(chalk.magenta(`      Date:  ${item.date}`));
+          if (item.description) console.log(chalk.white(`      Desc:  ${item.description.slice(0, 100)}...`));
+        });
+      }
+    } catch (err) {
+      handleError(err, spinner);
+    } finally {
+      await globalFetcherPool.close();
+    }
+  });
+
+// Thompson Sampling Bandit Inspection Command
+program
+  .command('bandit [domain]')
+  .description('Inspect online reinforcement learning domain defense distributions & bypass status')
+  .action(async (domain) => {
+    try {
+      await initStorage();
+      if (domain) {
+        const stats = globalBandit.getDomainStats(domain);
+        console.log(chalk.bold(`\n🎰 Bayesian Thompson Sampling Priors for: ${chalk.cyan(stats.domain)}`));
+        console.log(`   Total Scrape Trials: ${stats.totalTrials}`);
+        console.log(`   Static Tier  : E[X] = ${(stats.arms.static.expectedValue * 100).toFixed(1)}% (α=${stats.arms.static.alpha}, β=${stats.arms.static.beta})`);
+        console.log(`   Dynamic Tier : E[X] = ${(stats.arms.dynamic.expectedValue * 100).toFixed(1)}% (α=${stats.arms.dynamic.alpha}, β=${stats.arms.dynamic.beta})`);
+        console.log(`   Stealth Tier : E[X] = ${(stats.arms.stealth.expectedValue * 100).toFixed(1)}% (α=${stats.arms.stealth.alpha}, β=${stats.arms.stealth.beta})`);
+        if (stats.bypass.bypass) {
+          console.log(chalk.green(`   ⚡ Probe Bypass Active: Directly routes to ${stats.bypass.tier.toUpperCase()} (Confidence: ${(stats.bypass.confidence * 100).toFixed(1)}%)`));
+        } else {
+          console.log(chalk.yellow(`   Standard Probing Active (Zero bypass)`));
+        }
+      } else {
+        const all = globalBandit.getAllStats();
+        console.log(chalk.bold(`\n🎰 Learned Domain Prior Distributions (${all.length} domains tracked):`));
+        all.forEach(s => {
+          const bypassTag = s.bypass.bypass ? chalk.green(`[BYPASS ➔ ${s.bypass.tier.toUpperCase()}]`) : chalk.gray('[PROBE]');
+          console.log(`  • ${chalk.cyan(s.domain.padEnd(25))} ${bypassTag} Trials: ${s.totalTrials} | Static: ${(s.arms.static.expectedValue * 100).toFixed(0)}% | Stealth: ${(s.arms.stealth.expectedValue * 100).toFixed(0)}%`);
+        });
+      }
+    } catch (err) {
+      console.error(chalk.red(`Bandit inspection failed: ${err.message}`));
+    }
+  });
+
 program.parse(process.argv);
+
