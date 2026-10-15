@@ -105,8 +105,8 @@ async function runTests() {
   // Clean output directory for CLI test
   await fs.rm(testOutputDir, { recursive: true, force: true });
 
-  // Run a crawl on example.com targeting anchor links, saving to output_test under category 'cli-test'
-  const cliCommand = `node src/cli.js crawl https://example.com -s "a" --category cli-test -o ${testOutputDir}`;
+  // Run a crawl targeting anchor links, saving to output_test under category 'cli-test'
+  const cliCommand = `node src/cli.js crawl https://httpbin.org/links/2/0 -s "a" --category cli-test -o ${testOutputDir}`;
   console.log(`Executing CLI command: ${cliCommand}`);
   
   const { stdout, stderr } = await execAsync(cliCommand);
