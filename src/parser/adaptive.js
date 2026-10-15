@@ -1,7 +1,9 @@
 import { AdaptorElement, SelectorList } from './selector.js';
+import { computeElementSimHash, simHashSimilarity } from './simhash.js';
 
 /**
  * AdaptiveEngine handles fingerprinting elements and self-healing broken selectors.
+ * Enhanced in v2.1 with 64-bit SimHash Locality-Sensitive Hashing.
  */
 export class AdaptiveEngine {
   /**
@@ -12,7 +14,7 @@ export class AdaptiveEngine {
    */
   static generateFingerprint($, elem) {
     const $el = $(elem);
-    const text = $el.text().trim();
+    const text = $el.text().replace(/\s+/g, ' ').trim();
     const snippet = text.slice(0, 120);
 
     const classAttr = $el.attr('class') || '';
@@ -40,6 +42,9 @@ export class AdaptiveEngine {
       cur = cur.parent;
     }
 
+    // 64-bit SimHash structural fingerprint
+    const simHash = computeElementSimHash($, elem);
+
     return {
       tagName,
       id,
@@ -48,6 +53,7 @@ export class AdaptiveEngine {
       parentTagName: parentTag,
       parentId,
       path: path.join(' > '),
+      simHash,
       createdAt: new Date().toISOString()
     };
   }
@@ -72,35 +78,45 @@ export class AdaptiveEngine {
 
     let bestCandidate = null;
     let maxScore = -1;
+    const hasSimHash = Boolean(signature.simHash);
 
     candidates.each((_, elem) => {
       let score = 0;
       const $elem = $(elem);
 
-      // 1. Text snippet similarity (weight: 0.45)
-      const text = $elem.text().trim();
+      // 1. Text snippet similarity (weight: 0.35 if simhash, else 0.45)
+      const text = $elem.text().replace(/\s+/g, ' ').trim();
+      const textWeight = hasSimHash ? 0.35 : 0.45;
       if (signature.textSnippet && text) {
         if (text.includes(signature.textSnippet) || signature.textSnippet.includes(text)) {
-          score += 0.45;
+          score += textWeight;
         } else {
           const sigWords = new Set(signature.textSnippet.toLowerCase().split(/\s+/).filter(Boolean));
           const candWords = new Set(text.toLowerCase().split(/\s+/).filter(Boolean));
           const intersection = [...sigWords].filter(w => candWords.has(w));
           if (sigWords.size > 0) {
-            score += (intersection.length / sigWords.size) * 0.35;
+            score += (intersection.length / sigWords.size) * textWeight;
           }
         }
       }
 
-      // 2. Class overlap (weight: 0.25)
+      // 2. 64-bit SimHash Locality-Sensitive Hash similarity (weight: 0.25)
+      if (hasSimHash) {
+        const candSimHash = computeElementSimHash($, elem);
+        const sim = simHashSimilarity(signature.simHash, candSimHash);
+        score += sim * 0.25;
+      }
+
+      // 3. Class overlap (weight: 0.15 if simhash, else 0.25)
+      const classWeight = hasSimHash ? 0.15 : 0.25;
       if (signature.classes && signature.classes.length > 0) {
         const classAttr = $elem.attr('class') || '';
         const candClasses = classAttr.split(/\s+/).filter(Boolean);
         const matched = signature.classes.filter(c => candClasses.includes(c));
-        score += (matched.length / signature.classes.length) * 0.25;
+        score += (matched.length / signature.classes.length) * classWeight;
       }
 
-      // 3. Parent alignment (weight: 0.15)
+      // 4. Parent alignment (weight: 0.15)
       if (signature.parentTagName) {
         const parent = $elem.parent();
         if (parent.length > 0 && parent[0].name && parent[0].name.toLowerCase() === signature.parentTagName.toLowerCase()) {
@@ -108,9 +124,9 @@ export class AdaptiveEngine {
         }
       }
 
-      // 4. ID match (weight: 0.15)
+      // 5. ID match (weight: 0.10)
       if (signature.id && $elem.attr('id') === signature.id) {
-        score += 0.15;
+        score += 0.10;
       }
 
       if (score > maxScore) {
