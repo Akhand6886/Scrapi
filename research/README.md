@@ -22,6 +22,7 @@ Scrapi introduces a novel **Three-Pillar Autonomous Architecture**:
 | **04** | [Experimental Methodology & Empirical Benchmarks](04_experimental_methodology_and_empirical_benchmarks.md) | Controlled experimental setup, latency/throughput profiling across query engines, and memory stress tests. |
 | **05** | [Crawl Frontier & Graph Traversal Optimization](05_crawl_frontier_and_graph_traversal_optimization.md) | Web graph topology, priority queue heuristics, duplicate detection, and checkpoint state persistence. |
 | **06** | [Future Directions & Hybrid LLM Architectures](06_future_directions_and_llm_integration.md) | Trade-offs between microsecond deterministic trees vs token-heavy LLMs, and online reinforcement learning frontiers. |
+| **07** | [Bayesian Multi-Armed Bandits & Unsupervised Structural Entity Mining](07_multi_armed_bandits_and_unsupervised_schema_induction.md) | Thompson Sampling regret bounds, unsupervised DOM subtree cluster induction, and 64-bit SimHash LSH self-healing. |
 
 ---
 
