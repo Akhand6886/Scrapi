@@ -80,6 +80,12 @@ export async function initStorage(dbDir = './data', outputDir = './output') {
       UNIQUE(domain, name)
     );
 
+    CREATE TABLE IF NOT EXISTS bandit_domain_priors (
+      domain TEXT PRIMARY KEY,
+      data TEXT NOT NULL,
+      updated_at DATETIME NOT NULL
+    );
+
     CREATE INDEX IF NOT EXISTS idx_scrapes_category ON scrapes(category);
     CREATE INDEX IF NOT EXISTS idx_scrapes_scraped_at ON scrapes(scraped_at DESC);
     CREATE INDEX IF NOT EXISTS idx_fingerprints_domain ON element_fingerprints(domain);
@@ -517,4 +523,41 @@ export async function downloadMediaFiles(mediaList, markdownFilePath, baseOutput
   });
   
   await Promise.allSettled(downloadPromises);
+}
+
+/**
+ * Retrieves learned bandit priors for a domain from SQLite.
+ * @param {string} domain 
+ * @returns {object|null}
+ */
+export function getDomainBanditPrior(domain) {
+  if (!db) return null;
+  try {
+    const row = db.prepare('SELECT data FROM bandit_domain_priors WHERE domain = ?').get(domain);
+    if (!row) return null;
+    return JSON.parse(row.data);
+  } catch (e) {
+    return null;
+  }
+}
+
+/**
+ * Saves or updates learned bandit priors for a domain into SQLite.
+ * @param {string} domain 
+ * @param {object} priors 
+ */
+export function saveDomainBanditPrior(domain, priors) {
+  if (!db) return;
+  try {
+    const stmt = db.prepare(`
+      INSERT INTO bandit_domain_priors (domain, data, updated_at)
+      VALUES (?, ?, ?)
+      ON CONFLICT(domain) DO UPDATE SET
+        data = excluded.data,
+        updated_at = excluded.updated_at
+    `);
+    stmt.run(domain, JSON.stringify(priors), new Date().toISOString());
+  } catch (e) {
+    console.warn(`[Bandit Storage Error] Could not save priors for ${domain}:`, e.message);
+  }
 }
