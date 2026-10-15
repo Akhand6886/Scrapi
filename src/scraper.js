@@ -4,6 +4,7 @@ import { globalFetcherPool } from './fetchers/index.js';
 import { Response, NOISE_SELECTORS } from './parser/adaptor.js';
 import { AdaptiveEngine } from './parser/adaptive.js';
 import { MarkdownEngine } from './parser/markdown.js';
+import { scoreContentElement } from './trees/content_extractor.js';
 
 /**
  * Fetches HTML from a given URL with options. Supports HTTP Conditional Caching (ETag/Last-Modified).
@@ -73,22 +74,36 @@ export function findBestContentRoot($, selector = 'auto') {
     }
   }
 
-  // Priority 1: article
+  // Primary: Decision Tree DOM Content Extractor Evaluation
+  let bestCandidate = null;
+  let highestScore = -1;
+
+  $('article, main, [role="main"], section, div.content, div.post, div.article, div.entry, div').each((_, elem) => {
+    const analysis = scoreContentElement($, elem);
+    if (analysis.classification === 'MAIN_CONTENT' && analysis.score > highestScore) {
+      highestScore = analysis.score;
+      bestCandidate = elem;
+    }
+  });
+
+  if (bestCandidate) return $(bestCandidate);
+
+  // Fallback Priority 1: article
   const article = $('article');
   if (article.length > 0) return article.first();
 
-  // Priority 2: main or [role="main"]
+  // Fallback Priority 2: main or [role="main"]
   const main = $('main, [role="main"]');
   if (main.length > 0) return main.first();
 
-  // Priority 3: standard content classes/IDs
+  // Fallback Priority 3: standard content classes/IDs
   const standardSelectors = ['.content', '.post-content', '.article-body', '#content', '#main'];
   for (const sel of standardSelectors) {
     const el = $(sel);
     if (el.length > 0) return el.first();
   }
 
-  // Priority 4: div with highest text-to-tag ratio (heuristic)
+  // Fallback Priority 4: div with highest text-to-tag ratio (heuristic)
   let bestDiv = null;
   let maxRatio = -1;
 
@@ -105,7 +120,7 @@ export function findBestContentRoot($, selector = 'auto') {
 
   if (bestDiv) return $(bestDiv);
 
-  // Priority 5: body
+  // Fallback Priority 5: body
   return $('body').first();
 }
 
@@ -222,7 +237,8 @@ export async function scrapePage(url, options = {}) {
   return {
     metadata,
     markdown,
-    media: mediaToDownload
+    media: mediaToDownload,
+    decisionTree: response.decisionTree || null
   };
 }
 
