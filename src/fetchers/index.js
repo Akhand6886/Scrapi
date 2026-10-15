@@ -3,12 +3,19 @@ import { StaticFetcher } from './static.js';
 import { DynamicFetcher, closeSharedBrowser } from './dynamic.js';
 import { StealthyFetcher } from './stealth.js';
 import { routeTier } from '../trees/tier_router.js';
+import { globalBandit } from '../trees/bandit.js';
+import { getDomainBanditPrior, saveDomainBanditPrior } from '../storage.js';
 
-export { BaseFetcher, StaticFetcher, DynamicFetcher, StealthyFetcher };
+// Attach SQLite persistence to global bandit
+if (!globalBandit.storage) {
+  globalBandit.storage = { getDomainBanditPrior, saveDomainBanditPrior };
+}
+
+export { BaseFetcher, StaticFetcher, DynamicFetcher, StealthyFetcher, globalBandit };
 
 /**
  * FetcherPool manages fetcher instances and supports auto-escalation (Static -> Dynamic -> Stealth)
- * powered by the Autonomous Decision Tree Router.
+ * powered by the Autonomous Decision Tree Router and Bayesian Thompson Sampling Bandit.
  */
 export class FetcherPool {
   constructor(options = {}) {
@@ -16,6 +23,7 @@ export class FetcherPool {
     this.staticFetcher = new StaticFetcher(options);
     this.dynamicFetcher = null;
     this.stealthFetcher = null;
+    this.bandit = options.bandit || globalBandit;
   }
 
   getDynamicFetcher() {
@@ -46,14 +54,39 @@ export class FetcherPool {
     const fetcherType = (options.fetcher || this.options.fetcher || 'static').toLowerCase();
 
     if (fetcherType === 'dynamic') {
-      return this.getDynamicFetcher().fetch(url, options);
+      const res = await this.getDynamicFetcher().fetch(url, options);
+      this.bandit.recordReward(url, 'dynamic', res && res.status < 400);
+      return res;
     }
 
     if (fetcherType === 'stealth') {
-      return this.getStealthFetcher().fetch(url, options);
+      const res = await this.getStealthFetcher().fetch(url, options);
+      this.bandit.recordReward(url, 'stealth', res && res.status < 400);
+      return res;
     }
 
     if (fetcherType === 'auto') {
+      // 1. Bandit High-Confidence Probe Bypass Check
+      const bypassCheck = this.bandit.shouldBypassProbe(url);
+      if (bypassCheck.bypass && bypassCheck.tier === 'stealth') {
+        if (!options.silent) {
+          console.log(`🎰 [Bayesian Bandit] High-confidence defense learned (${Math.round(bypassCheck.confidence * 100)}%) ➔ Directly launching STEALTH (Probe Bypassed)`);
+        }
+        const resp = await this.getStealthFetcher().fetch(url, options);
+        this.bandit.recordReward(url, 'stealth', resp && resp.status < 400);
+        return resp;
+      }
+
+      if (bypassCheck.bypass && bypassCheck.tier === 'dynamic') {
+        if (!options.silent) {
+          console.log(`🎰 [Bayesian Bandit] Learned SPA requirement (${Math.round(bypassCheck.confidence * 100)}%) ➔ Directly launching DYNAMIC (Probe Bypassed)`);
+        }
+        const resp = await this.getDynamicFetcher().fetch(url, options);
+        this.bandit.recordReward(url, 'dynamic', resp && resp.status < 400);
+        return resp;
+      }
+
+      // 2. Perform Standard Zero-Overhead Probe
       let probe;
       try {
         probe = await this.staticFetcher.fetch(url, options);
@@ -67,8 +100,10 @@ export class FetcherPool {
         if (!options.silent) {
           console.log(`🌳 [Decision Tree] Route: STEALTH (${Math.round(decision.confidence * 100)}% Conf) ➔ ${decision.label}`);
         }
+        this.bandit.recordReward(url, 'static', false); // Static probe encountered bot defense
         const resp = await this.getStealthFetcher().fetch(url, options);
         resp.decisionTree = decision;
+        this.bandit.recordReward(url, 'stealth', resp && resp.status < 400);
         return resp;
       }
 
@@ -76,18 +111,22 @@ export class FetcherPool {
         if (!options.silent) {
           console.log(`🌳 [Decision Tree] Route: DYNAMIC (${Math.round(decision.confidence * 100)}% Conf) ➔ ${decision.label}`);
         }
+        this.bandit.recordReward(url, 'static', false); // Static probe was inadequate for SPA
         const resp = await this.getDynamicFetcher().fetch(url, options);
         resp.decisionTree = decision;
+        this.bandit.recordReward(url, 'dynamic', resp && resp.status < 400);
         return resp;
       }
 
       // Static tier selected
       if (probe && probe.status >= 200 && probe.status < 400 && probe.rawHtml) {
         probe.decisionTree = decision;
+        this.bandit.recordReward(url, 'static', true);
         return probe;
       } else {
         const resp = await this.getDynamicFetcher().fetch(url, options);
         resp.decisionTree = decision;
+        this.bandit.recordReward(url, 'dynamic', resp && resp.status < 400);
         return resp;
       }
     }
