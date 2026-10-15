@@ -90,6 +90,11 @@ function App() {
   const [showMcpModal, setShowMcpModal] = useState(false);
   const [mcpInfo, setMcpInfo] = useState(null);
 
+  // Entities & Online Bandit State
+  const [entitiesData, setEntitiesData] = useState(null);
+  const [banditStats, setBanditStats] = useState([]);
+  const [miningEntities, setMiningEntities] = useState(false);
+
   // Export State
   const [showExportMenu, setShowExportMenu] = useState(false);
 
@@ -129,6 +134,29 @@ function App() {
       const data = await safeFetchJson('/api/mcp/info');
       setMcpInfo(data);
     } catch (e) {}
+  };
+
+  const handleMineEntities = async () => {
+    if (!targetUrl) {
+      showToast('Please enter a target URL first', 'error');
+      return;
+    }
+    setMiningEntities(true);
+    try {
+      const data = await safeFetchJson('/api/entities', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ url: targetUrl, fetcher: activeFetcher, limit: 50 })
+      });
+      setEntitiesData(data);
+      const bStats = await safeFetchJson('/api/bandit');
+      setBanditStats(bStats || []);
+      showToast(`Discovered ${data.entities?.length || 0} entities (${data.detectedType?.toUpperCase() || 'LIST'})`, 'success');
+    } catch (err) {
+      showToast(`Entity mining failed: ${err.message}`, 'error');
+    } finally {
+      setMiningEntities(false);
+    }
   };
 
   useEffect(() => {
@@ -1259,6 +1287,16 @@ function App() {
               <span>🎯</span>
               <span>Adaptive Studio</span>
             </button>
+            <button 
+              onClick={() => {
+                setActiveTab('entities');
+                safeFetchJson('/api/bandit').then(b => setBanditStats(b || []));
+              }}
+              class={`h-full px-3 text-xs font-bold border-b-2 transition-all flex items-center space-x-1.5 ${activeTab === 'entities' ? 'border-amber-500 text-amber-400' : 'border-transparent text-slate-400 hover:text-slate-200'}`}
+            >
+              <span>📦</span>
+              <span>Entities & Bandit RL</span>
+            </button>
           </div>
 
           {/* Loading Overlay */}
@@ -1515,6 +1553,175 @@ function App() {
                   </div>
                 )}
               </div>
+            </div>
+          </div>
+
+          {/* Tab 5: Unsupervised Entities & Bandit RL Studio */}
+          <div class={`flex-1 h-full overflow-auto custom-scrollbar p-6 space-y-6 ${activeTab === 'entities' ? 'block' : 'hidden'}`}>
+            {/* Action Bar */}
+            <div class="bg-slate-900 border border-white/5 rounded-2xl p-5 shadow-lg flex flex-col md:flex-row md:items-center justify-between gap-4">
+              <div class="space-y-1">
+                <div class="flex items-center space-x-2">
+                  <span class="text-xl">📦</span>
+                  <h3 class="text-sm font-bold text-slate-100">Unsupervised Entity Induction & Online Bandit RL</h3>
+                </div>
+                <p class="text-[11px] text-slate-400">Zero-selector structural pattern discovery for products, listings, and cards, paired with Bayesian defense learning.</p>
+              </div>
+
+              <div class="flex items-center space-x-3">
+                <button
+                  onClick={handleMineEntities}
+                  disabled={miningEntities || !targetUrl}
+                  class="px-4 py-2 bg-gradient-to-r from-amber-600 to-orange-600 hover:from-amber-500 hover:to-orange-500 disabled:opacity-50 text-white rounded-xl text-xs font-bold shadow-lg shadow-amber-900/20 transition-all flex items-center space-x-2"
+                >
+                  {miningEntities ? (
+                    <>
+                      <div class="w-3.5 h-3.5 border-2 border-white/30 border-t-white rounded-full animate-spin"></div>
+                      <span>Mining Repeating Clusters...</span>
+                    </>
+                  ) : (
+                    <>
+                      <span>⚡</span>
+                      <span>Mine Repeating Entities</span>
+                    </>
+                  )}
+                </button>
+              </div>
+            </div>
+
+            {/* Extracted Entities Grid */}
+            {entitiesData ? (
+              <div class="space-y-4">
+                {/* Stats Header Bar */}
+                <div class="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                  <div class="bg-slate-900 border border-white/5 rounded-xl p-3">
+                    <div class="text-[10px] text-slate-400 font-semibold uppercase">Items Discovered</div>
+                    <div class="text-lg font-bold text-amber-400">{entitiesData.entities?.length || 0}</div>
+                  </div>
+                  <div class="bg-slate-900 border border-white/5 rounded-xl p-3">
+                    <div class="text-[10px] text-slate-400 font-semibold uppercase">Archetype</div>
+                    <div class="text-lg font-bold text-teal-400 uppercase">{entitiesData.detectedType || 'GENERIC'}</div>
+                  </div>
+                  <div class="bg-slate-900 border border-white/5 rounded-xl p-3">
+                    <div class="text-[10px] text-slate-400 font-semibold uppercase">Model Confidence</div>
+                    <div class="text-lg font-bold text-emerald-400">{Math.round((entitiesData.confidence || 0) * 100)}%</div>
+                  </div>
+                  <div class="bg-slate-900 border border-white/5 rounded-xl p-3">
+                    <div class="text-[10px] text-slate-400 font-semibold uppercase">Clusters Analyzed</div>
+                    <div class="text-lg font-bold text-purple-400">{entitiesData.clusterCount || 0}</div>
+                  </div>
+                </div>
+
+                {/* Cards Grid */}
+                <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+                  {entitiesData.entities?.map((item, idx) => (
+                    <div key={idx} class="bg-slate-900/90 border border-white/5 rounded-xl p-4 flex flex-col justify-between space-y-3 hover:border-amber-500/30 transition-all shadow-md">
+                      <div class="space-y-2">
+                        {item.image && (
+                          <div class="w-full h-32 bg-slate-950 rounded-lg overflow-hidden flex items-center justify-center">
+                            <img src={item.image} alt={item.title || ''} class="w-full h-full object-cover" onError={(e) => { e.target.style.display = 'none'; }} />
+                          </div>
+                        )}
+                        <div class="flex items-start justify-between gap-2">
+                          <h4 class="text-xs font-bold text-slate-100 line-clamp-2">{item.title || '(Untitled Item)'}</h4>
+                          {item.badge && (
+                            <span class="px-2 py-0.5 text-[9px] font-bold bg-amber-500/20 text-amber-300 border border-amber-500/30 rounded uppercase shrink-0">
+                              {item.badge}
+                            </span>
+                          )}
+                        </div>
+                        {item.description && (
+                          <p class="text-[11px] text-slate-400 line-clamp-3">{item.description}</p>
+                        )}
+                      </div>
+
+                      <div class="pt-2 border-t border-white/5 flex items-center justify-between text-[11px]">
+                        {item.price ? (
+                          <span class="font-bold text-emerald-400">{item.price}</span>
+                        ) : item.date ? (
+                          <span class="text-slate-400 font-mono text-[10px]">{item.date}</span>
+                        ) : (
+                          <span class="text-slate-500">#{idx + 1}</span>
+                        )}
+                        {item.url && (
+                          <a href={item.url} target="_blank" rel="noreferrer" class="text-blue-400 hover:text-blue-300 font-semibold text-[10px] flex items-center space-x-1">
+                            <span>Visit</span>
+                            <span>↗</span>
+                          </a>
+                        )}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ) : (
+              <div class="bg-slate-900/40 border border-dashed border-white/10 rounded-2xl p-8 text-center space-y-3">
+                <span class="text-3xl">📦</span>
+                <p class="text-xs text-slate-400 max-w-md mx-auto">No repeating entities mined yet. Enter any product catalog, news feed, or search page URL and click <strong class="text-amber-400">Mine Repeating Entities</strong>.</p>
+              </div>
+            )}
+
+            {/* Bayesian Bandit Domain Defenses Section */}
+            <div class="bg-slate-900 border border-white/5 rounded-2xl p-5 space-y-4 shadow-lg">
+              <div class="flex items-center justify-between">
+                <div class="flex items-center space-x-2">
+                  <span class="text-lg">🎰</span>
+                  <div>
+                    <h3 class="text-xs font-bold text-slate-100">Bayesian Bandit Defense Priors (Thompson Sampling)</h3>
+                    <p class="text-[10px] text-slate-400">Dynamically tracks bot defense success probabilities and bypasses probes for protected targets.</p>
+                  </div>
+                </div>
+                <button
+                  onClick={async () => {
+                    const b = await safeFetchJson('/api/bandit');
+                    setBanditStats(b || []);
+                  }}
+                  class="px-2.5 py-1 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded text-[10px] font-semibold"
+                >
+                  ↻ Refresh
+                </button>
+              </div>
+
+              {banditStats.length === 0 ? (
+                <p class="text-xs text-slate-500 italic py-2">No domain trials recorded in this session yet.</p>
+              ) : (
+                <div class="overflow-x-auto">
+                  <table class="w-full text-left text-xs font-mono">
+                    <thead>
+                      <tr class="border-b border-white/5 text-[10px] text-slate-400 uppercase">
+                        <th class="py-2 px-3">Domain</th>
+                        <th class="py-2 px-3">Trials</th>
+                        <th class="py-2 px-3">Static E[X]</th>
+                        <th class="py-2 px-3">Dynamic E[X]</th>
+                        <th class="py-2 px-3">Stealth E[X]</th>
+                        <th class="py-2 px-3">Route Optimization</th>
+                      </tr>
+                    </thead>
+                    <tbody class="divide-y divide-white/5 text-[11px]">
+                      {banditStats.map((st, i) => (
+                        <tr key={i} class="hover:bg-white/[0.02]">
+                          <td class="py-2 px-3 font-bold text-slate-200">{st.domain}</td>
+                          <td class="py-2 px-3 text-slate-400">{st.totalTrials}</td>
+                          <td class="py-2 px-3 text-slate-300">{(st.arms.static.expectedValue * 100).toFixed(0)}% <span class="text-[9px] text-slate-500">({st.arms.static.alpha}/{st.arms.static.beta})</span></td>
+                          <td class="py-2 px-3 text-slate-300">{(st.arms.dynamic.expectedValue * 100).toFixed(0)}% <span class="text-[9px] text-slate-500">({st.arms.dynamic.alpha}/{st.arms.dynamic.beta})</span></td>
+                          <td class="py-2 px-3 text-slate-300">{(st.arms.stealth.expectedValue * 100).toFixed(0)}% <span class="text-[9px] text-slate-500">({st.arms.stealth.alpha}/{st.arms.stealth.beta})</span></td>
+                          <td class="py-2 px-3">
+                            {st.bypass.bypass ? (
+                              <span class="px-2 py-0.5 bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 rounded text-[9px] font-bold">
+                                ⚡ DIRECT {st.bypass.tier.toUpperCase()} ({Math.round(st.bypass.confidence * 100)}%)
+                              </span>
+                            ) : (
+                              <span class="px-2 py-0.5 bg-slate-800 text-slate-400 rounded text-[9px]">
+                                STANDARD PROBE
+                              </span>
+                            )}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
             </div>
           </div>
         </section>
