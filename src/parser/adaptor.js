@@ -2,6 +2,8 @@ import * as cheerio from 'cheerio';
 import { AdaptorElement, SelectorList } from './selector.js';
 import { AdaptiveEngine } from './adaptive.js';
 import { MarkdownEngine } from './markdown.js';
+import { extractEntities } from './cluster_extractor.js';
+
 
 export const NOISE_SELECTORS = [
   'nav', 'header', 'footer',
@@ -304,6 +306,17 @@ export class Response {
       });
       return scripts.length === 1 ? scripts[0] : scripts;
     }
+  }
+
+  /**
+   * Unsupervised extraction of repeating entity collections (products, cards, listings).
+   * @param {object} [options]
+   * @param {string} [options.rootSelector]
+   * @param {number} [options.limit=100]
+   * @returns {{ entities: Array<Record<string, *>>, detectedType: string, clusterCount: number, confidence: number }}
+   */
+  extractEntities(options = {}) {
+    return extractEntities(this.$, { baseUrl: this.url, ...options });
   }
 }
 
