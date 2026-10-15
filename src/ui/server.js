@@ -23,6 +23,10 @@ import { scrapePage, discoverCategories, autoDetectLinkSelector } from '../scrap
 import { runSpider } from '../spider.js';
 import { globalFetcherPool } from '../fetchers/index.js';
 import { AdaptiveEngine } from '../parser/index.js';
+import * as cheerio from 'cheerio';
+import { extractEntities } from '../parser/cluster_extractor.js';
+import { globalBandit } from '../trees/bandit.js';
+
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -104,6 +108,33 @@ app.post('/api/preview', async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
+
+// POST extract repeating entity collections (unsupervised)
+app.post('/api/entities', async (req, res) => {
+  const { url, fetcher, limit } = req.body;
+  if (!url) {
+    return res.status(400).json({ error: 'Missing url' });
+  }
+  try {
+    const response = await globalFetcherPool.fetch(url, { fetcher: fetcher || 'auto' });
+    const $ = cheerio.load(response.rawHtml || response.html || '');
+    const result = extractEntities($, { baseUrl: url, limit: parseInt(limit, 10) || 50 });
+    res.json(result);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// GET online reinforcement learning domain defense distributions
+app.get('/api/bandit', (req, res) => {
+  try {
+    const stats = globalBandit.getAllStats();
+    res.json(stats);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 
 // POST discover links matching selector
 app.post('/api/discover', async (req, res) => {
