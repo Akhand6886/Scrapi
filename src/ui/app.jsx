@@ -39,8 +39,8 @@ function App() {
   const [profileName, setProfileName] = useState('');
   const [includeImages, setIncludeImages] = useState(false);
   const [downloadMedia, setDownloadMedia] = useState(false);
-  const [noMeta, setNoMeta] = useState(false);
-  const [renderMode, setRenderMode] = useState('static'); // 'static' | 'dynamic' | 'stealth'
+  const [renderMode, setRenderMode] = useState('auto'); // 'auto' | 'static' | 'dynamic' | 'stealth'
+  const [lastDecision, setLastDecision] = useState(null);
 
   // Console Mode ('single' | 'batch' | 'spider')
   const [consoleMode, setConsoleMode] = useState('single');
@@ -231,6 +231,9 @@ function App() {
       });
 
       setMarkdownOutput(data.markdown);
+      if (data.decisionTree) {
+        setLastDecision(data.decisionTree);
+      }
       setActiveTab('markdown');
       showToast(`Scraped successfully via ${renderMode.toUpperCase()}! Saved to ${data.filename}`, 'success');
       loadData();
@@ -668,38 +671,47 @@ function App() {
             <div class="flex justify-between items-center">
               <label class="text-[10px] text-slate-400 uppercase tracking-wider font-bold">Progressive Fetcher Tier</label>
               <span class={`text-[9px] font-bold px-1.5 py-0.5 rounded uppercase ${
+                renderMode === 'auto' ? 'text-amber-400 bg-amber-500/10 border border-amber-500/30' :
                 renderMode === 'static' ? 'text-blue-400 bg-blue-500/10' :
                 renderMode === 'dynamic' ? 'text-teal-400 bg-teal-500/10' :
                 'text-purple-400 bg-purple-500/10 border border-purple-500/30'
               }`}>
-                {renderMode === 'stealth' ? '🛡️ ANTI-BOT BYPASS' : renderMode === 'dynamic' ? '🌐 PLAYWRIGHT SPA' : '⚡ 304 CACHED'}
+                {renderMode === 'auto' ? '🤖 DECISION TREE (AUTO)' : renderMode === 'stealth' ? '🛡️ ANTI-BOT BYPASS' : renderMode === 'dynamic' ? '🌐 PLAYWRIGHT SPA' : '⚡ 304 CACHED'}
               </span>
             </div>
             
-            <div class="grid grid-cols-3 gap-1 pt-1">
+            <div class="grid grid-cols-4 gap-1 pt-1">
+              <button
+                onClick={() => setRenderMode('auto')}
+                class={`py-1.5 px-1.5 text-[10px] font-semibold rounded-lg transition-all border ${renderMode === 'auto' ? 'bg-amber-600 text-white border-amber-400 shadow-md' : 'bg-slate-950/60 border-white/5 text-slate-400 hover:text-slate-200'}`}
+                title="AI Decision Tree: Auto-routes in <20µs to Static, Dynamic, or Stealth based on DOM/HTTP signals"
+              >
+                🤖 Auto
+              </button>
               <button
                 onClick={() => setRenderMode('static')}
-                class={`py-1.5 px-2 text-[11px] font-semibold rounded-lg transition-all border ${renderMode === 'static' ? 'bg-blue-600 text-white border-blue-400 shadow-md' : 'bg-slate-950/60 border-white/5 text-slate-400 hover:text-slate-200'}`}
+                class={`py-1.5 px-1.5 text-[10px] font-semibold rounded-lg transition-all border ${renderMode === 'static' ? 'bg-blue-600 text-white border-blue-400 shadow-md' : 'bg-slate-950/60 border-white/5 text-slate-400 hover:text-slate-200'}`}
                 title="Ultra-fast connection pooling, TLS headers, and HTTP 304 caching"
               >
                 ⚡ Static
               </button>
               <button
                 onClick={() => setRenderMode('dynamic')}
-                class={`py-1.5 px-2 text-[11px] font-semibold rounded-lg transition-all border ${renderMode === 'dynamic' ? 'bg-teal-600 text-white border-teal-400 shadow-md' : 'bg-slate-950/60 border-white/5 text-slate-400 hover:text-slate-200'}`}
+                class={`py-1.5 px-1.5 text-[10px] font-semibold rounded-lg transition-all border ${renderMode === 'dynamic' ? 'bg-teal-600 text-white border-teal-400 shadow-md' : 'bg-slate-950/60 border-white/5 text-slate-400 hover:text-slate-200'}`}
                 title="Playwright headless browser for dynamic JavaScript single-page apps"
               >
                 🌐 Dynamic
               </button>
               <button
                 onClick={() => setRenderMode('stealth')}
-                class={`py-1.5 px-2 text-[11px] font-semibold rounded-lg transition-all border ${renderMode === 'stealth' ? 'bg-purple-600 text-white border-purple-400 shadow-md' : 'bg-slate-950/60 border-white/5 text-slate-400 hover:text-slate-200'}`}
+                class={`py-1.5 px-1.5 text-[10px] font-semibold rounded-lg transition-all border ${renderMode === 'stealth' ? 'bg-purple-600 text-white border-purple-400 shadow-md' : 'bg-slate-950/60 border-white/5 text-slate-400 hover:text-slate-200'}`}
                 title="Anti-bot evasion: Cloudflare Turnstile bypass, navigator mask, canvas noise"
               >
                 🛡️ Stealth
               </button>
             </div>
             <div class="text-[9px] text-slate-400 pt-1 leading-tight">
+              {renderMode === 'auto' && 'Autonomous CART Decision Tree. Analyzes HTTP status, Turnstile tokens & SPA root in <20µs.'}
               {renderMode === 'static' && 'Ultra-fast HTTP client with connection keep-alive and ETag caching.'}
               {renderMode === 'dynamic' && 'Full Chromium rendering for React, Next.js, and client-side SPAs.'}
               {renderMode === 'stealth' && 'Anti-detection engine that solves Cloudflare Turnstile challenges automatically.'}
@@ -1281,6 +1293,25 @@ function App() {
           <div class={`flex-1 h-full overflow-auto custom-scrollbar p-6 ${activeTab === 'markdown' ? 'block' : 'hidden'}`}>
             {markdownOutput ? (
               <div class="space-y-4 max-w-4xl mx-auto">
+                {lastDecision && (
+                  <div class="bg-amber-950/30 border border-amber-500/30 p-3 rounded-xl flex items-center justify-between text-xs text-amber-200">
+                    <div class="flex items-center space-x-2.5">
+                      <span class="text-lg">🌳</span>
+                      <div>
+                        <div class="font-bold flex items-center space-x-2">
+                          <span>Decision Tree Route: <span class="uppercase text-amber-400 font-mono px-1.5 py-0.5 bg-amber-500/20 rounded">{lastDecision.tier}</span></span>
+                          <span class="text-amber-300/70 text-[11px]">({Math.round((lastDecision.confidence || 1) * 100)}% Confidence)</span>
+                        </div>
+                        <div class="text-[11px] text-amber-300/80 font-mono mt-0.5">{lastDecision.label}</div>
+                      </div>
+                    </div>
+                    {lastDecision.explanation && (
+                      <span class="text-[10px] text-slate-400 font-mono hidden md:inline-block max-w-xs truncate" title={lastDecision.explanation}>
+                        {lastDecision.explanation}
+                      </span>
+                    )}
+                  </div>
+                )}
                 <div class="flex justify-between items-center bg-slate-900 border border-white/5 p-3 rounded-xl">
                   <span class="text-xs text-slate-400 font-mono">Word Count: {markdownOutput.split(/\s+/).length}</span>
                   <button 
