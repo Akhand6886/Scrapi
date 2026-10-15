@@ -2,6 +2,7 @@ import * as cheerio from 'cheerio';
 import { Response } from '../parser/adaptor.js';
 import { AdaptiveEngine } from '../parser/adaptive.js';
 import { MarkdownEngine } from '../parser/markdown.js';
+import { routeTier } from '../trees/tier_router.js';
 
 // Sample HTML fixture simulating a modern content-rich webpage
 const FIXTURE_HTML = `
@@ -178,6 +179,31 @@ export async function runParserBenchmarks(options = {}) {
       durationMs: parseFloat(durationMs.toFixed(2)),
       opsPerSec,
       avgLatencyUs: parseFloat(((durationNs / mdIterations) / 1000).toFixed(2))
+    };
+  }
+
+  // 6. Decision Tree Autonomous Tier Routing
+  {
+    const probe = {
+      status: 200,
+      rawHtml: FIXTURE_HTML,
+      url: 'https://benchmark.local/article'
+    };
+
+    const start = process.hrtime.bigint();
+    for (let i = 0; i < iterations; i++) {
+      routeTier(probe);
+    }
+    const end = process.hrtime.bigint();
+    const durationNs = Number(end - start);
+    const durationMs = durationNs / 1e6;
+    const opsPerSec = Math.round((iterations / (durationMs / 1000)));
+    results.decisionTree = {
+      name: 'Autonomous Decision Tree Inference',
+      iterations,
+      durationMs: parseFloat(durationMs.toFixed(2)),
+      opsPerSec,
+      avgLatencyUs: parseFloat(((durationNs / iterations) / 1000).toFixed(2))
     };
   }
 
