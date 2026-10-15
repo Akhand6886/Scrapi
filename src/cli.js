@@ -43,8 +43,8 @@ function handleError(error, spinner) {
 
 // Scrape helper used by scrape command and batch command
 async function performScrape(url, options) {
-  const fetcherType = options.fetcher || 'static';
-  const spinner = ora(`Scraping ${chalk.cyan(url)} (Fetcher: ${chalk.yellow(fetcherType)})...`).start();
+  const fetcherType = options.fetcher || 'auto';
+  const spinner = ora(`Scraping ${chalk.cyan(url)} (Tier: ${chalk.yellow(fetcherType.toUpperCase())})...`).start();
   let dbRecord = {
     url,
     scraped_at: new Date().toISOString(),
@@ -74,7 +74,7 @@ async function performScrape(url, options) {
       images: !!options.images,
       downloadMedia: !!options.downloadMedia,
       noCache: !!options.noCache,
-      fetcher: options.fetcher || 'static'
+      fetcher: options.fetcher || 'auto'
     });
 
     dbRecord.title = result.metadata.title;
@@ -168,7 +168,7 @@ async function performScrape(url, options) {
 program
   .command('scrape <url>')
   .description('Scrape a single URL with multi-tier fetchers and save as Markdown')
-  .option('-f, --fetcher <type>', 'Fetcher tier: static, dynamic (Playwright), or stealth (Anti-bot)', 'static')
+  .option('-f, --fetcher <type>', 'Fetcher tier: auto (Decision Tree), static, dynamic (Playwright), or stealth (Anti-bot)', 'auto')
   .option('-o, --output <dir>', 'Directory to save Markdown files', './output')
   .option('-s, --selector <css>', 'CSS selector to target specific content area', 'auto')
   .option('--filename <name>', 'Custom output filename (no extension)')
@@ -187,15 +187,19 @@ program
   .option('--output-json', 'Save structured JSON alongside Markdown', false)
   .option('--no-cache', 'Bypass HTTP cache and force fresh request', false)
   .action(async (url, options) => {
-    await initStorage(undefined, options.output);
-    await performScrape(url, options);
+    try {
+      await initStorage(undefined, options.output);
+      await performScrape(url, options);
+    } finally {
+      await globalFetcherPool.close();
+    }
   });
 
 // Shell command (Interactive REPL)
 program
   .command('shell [url]')
   .description('Open an interactive Scrapi REPL console to test selectors and fetchers in real time')
-  .option('-f, --fetcher <type>', 'Fetcher tier: static, dynamic, or stealth', 'static')
+  .option('-f, --fetcher <type>', 'Fetcher tier: auto (Decision Tree), static, dynamic, or stealth', 'auto')
   .action(async (url, options) => {
     await initStorage();
     await startShell(url, options);
@@ -226,7 +230,7 @@ program
 program
   .command('batch <file>')
   .description('Scrape all URLs listed in a .txt file (one per line)')
-  .option('-f, --fetcher <type>', 'Fetcher tier: static, dynamic, or stealth', 'static')
+  .option('-f, --fetcher <type>', 'Fetcher tier: auto (Decision Tree), static, dynamic, or stealth', 'auto')
   .option('-o, --output <dir>', 'Directory to save Markdown files', './output')
   .option('-s, --selector <css>', 'CSS selector to target specific content area', 'auto')
   .option('--category <name>', 'Category name to tag scrapes and create subfolder')
@@ -312,6 +316,8 @@ program
       }
     } catch (err) {
       handleError(err, spinner);
+    } finally {
+      await globalFetcherPool.close();
     }
   });
 
@@ -466,7 +472,7 @@ program
   .command('crawl <url>')
   .description('Crawl a list/index page, discover nested links, and scrape them concurrently under a category')
   .requiredOption('-s, --selector <css>', 'CSS selector targeting anchor links on list page')
-  .option('-f, --fetcher <type>', 'Fetcher tier: static, dynamic, or stealth', 'static')
+  .option('-f, --fetcher <type>', 'Fetcher tier: auto (Decision Tree), static, dynamic, or stealth', 'auto')
   .option('-o, --output <dir>', 'Directory to save Markdown files', './output')
   .option('--category <name>', 'Category name to tag scrapes and create subfolder')
   .option('-c, --concurrency <number>', 'Number of parallel scraper workers', '2')
@@ -555,6 +561,8 @@ program
       console.log(chalk.bold.green(`\n✓ Crawl completed! Successfully scraped ${successfullyScraped.length}/${urls.length} pages.`));
     } catch (err) {
       handleError(err, spinner);
+    } finally {
+      await globalFetcherPool.close();
     }
   });
 
@@ -562,7 +570,7 @@ program
 program
   .command('spider <url>')
   .description('Recursively crawl and scrape an entire website under the same origin')
-  .option('-f, --fetcher <type>', 'Fetcher tier: static, dynamic, or stealth', 'static')
+  .option('-f, --fetcher <type>', 'Fetcher tier: auto (Decision Tree), static, dynamic, or stealth', 'auto')
   .option('-o, --output <dir>', 'Directory to save Markdown files', './output')
   .option('-c, --concurrency <number>', 'Number of parallel scraper workers', '2')
   .option('-d, --depth <number>', 'Maximum link crawling depth', 'Infinity')
@@ -607,6 +615,8 @@ program
       console.log(chalk.red(`   Failed/Error Pages:   ${stats.failed}\n`));
     } catch (err) {
       handleError(err, spinner);
+    } finally {
+      await globalFetcherPool.close();
     }
   });
 
