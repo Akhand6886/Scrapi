@@ -477,6 +477,7 @@ program
   .option('-o, --output <dir>', 'Directory to save Markdown files', './output')
   .option('--category <name>', 'Category name to tag scrapes and create subfolder')
   .option('-c, --concurrency <number>', 'Number of parallel scraper workers', '2')
+  .option('-l, --limit <number>', 'Maximum number of discovered links to scrape')
   .option('--images', 'Include image alt text in output', false)
   .option('--download-media', 'Download images to local media directory', false)
   .option('--no-meta', 'Skip YAML frontmatter block', false)
@@ -520,10 +521,17 @@ program
         }
       });
       
-      const urls = Array.from(discoveredUrls);
+      let urls = Array.from(discoveredUrls);
       if (urls.length === 0) {
         spinner.fail(chalk.yellow('No links found matching list page selector.'));
         return;
+      }
+
+      if (options.limit) {
+        const lim = parseInt(options.limit, 10);
+        if (!isNaN(lim) && lim > 0) {
+          urls = urls.slice(0, lim);
+        }
       }
       
       const concurrency = Math.max(1, parseInt(options.concurrency, 10) || 2);
