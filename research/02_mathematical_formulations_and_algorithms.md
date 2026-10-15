@@ -121,7 +121,68 @@ $$\text{Default weights: } w_{\iota} = 0.30,\ w_{\mathcal{C}} = 0.25,\ w_{\tau} 
 
 | Algorithm | Theoretical Time Complexity | Empirical Latency (V8 Runtime) | Memory Complexity |
 |---|---|---|---|
-| **CART Tree Traversal** | $\mathcal{O}(D)$ where $D \le 5$ (depth) | **$12 - 25\ \mu\text{s}$** | $\mathcal{O}(1)$ |
-| **DOM Feature Extraction** | $\mathcal{O}(N)$ where $N$ is element count | **$60 - 180\ \mu\text{s}$** | $\mathcal{O}(N)$ |
+| **CART Tree Traversal (v2.0, Depth ≤ 14)** | $\mathcal{O}(D)$ where $D \le 14$ | **$12 - 38\ \mu\text{s}$** | $\mathcal{O}(1)$ |
+| **DOM Feature Extraction (v2.0)** | $\mathcal{O}(N)$ where $N$ is element count | **$60 - 210\ \mu\text{s}$** | $\mathcal{O}(N)$ |
+| **Random Forest Inference (7 Trees)** | $\mathcal{O}(B \cdot D)$ where $B=7, D \le 8$ | **$45 - 90\ \mu\text{s}$** | $\mathcal{O}(B)$ |
 | **Adaptive Selector Relocation** | $\mathcal{O}(K \cdot |\mathcal{C}|)$ where $K$ is tag matches | **$0.8 - 2.5\ \text{ms}$** | $\mathcal{O}(K)$ |
 | **Markdown Conversion (GFM)** | $\mathcal{O}(N)$ linear DOM traversal | **$4 - 12\ \text{ms}$** | $\mathcal{O}(N)$ |
+
+---
+
+## 2.6 Mathematical Formulation: Pure JS Supervised CART Training (`DecisionTree.fit`)
+
+Scrapi v2.0 introduces an integrated recursive binary tree learner implementing the standard Breiman CART induction algorithm in pure JavaScript without external dependencies.
+
+Given training samples $\mathcal{D} = \{(\mathbf{x}_i, y_i)\}_{i=1}^N$ where $\mathbf{x}_i \in \mathbb{R}^M$ and $y_i \in \mathcal{Y}$:
+
+### 1. Optimal Split Selection via Weighted Impurity Minimization
+For every candidate feature $X_j$ and observed threshold value $\theta \in \text{Unique}(X_j)$:
+$$\mathcal{D}_L = \{(\mathbf{x}_i, y_i) \mid x_{i,j} \le \theta\}, \quad \mathcal{D}_R = \{(\mathbf{x}_i, y_i) \mid x_{i,j} > \theta\}$$
+
+The candidate split $\langle X_j^*, \theta^* \rangle$ is chosen to minimize the weighted partition Gini impurity:
+$$\langle X_j^*, \theta^* \rangle = \arg\min_{j, \theta} \left[ \frac{|\mathcal{D}_L|}{|\mathcal{D}|} I_G(\mathcal{D}_L) + \frac{|\mathcal{D}_R|}{|\mathcal{D}|} I_G(\mathcal{D}_R) \right]$$
+
+### 2. Stopping Conditions
+Recursive partitioning terminates when:
+- Current depth $d \ge d_{\max}$ (maximum tree depth limit, default $d_{\max}=8$).
+- Partition cardinality $|\mathcal{D}| < N_{\min}$ (minimum samples for split, default $N_{\min}=2$).
+- Partition impurity $I_G(\mathcal{D}) = 0$ (all instances belong to a single class).
+- No valid split yields $\Delta I_G > 0$.
+
+Upon termination, leaf node assigns the majority class:
+$$\hat{y} = \arg\max_{c \in \mathcal{Y}} \sum_{i \in \mathcal{D}} \mathbb{I}(y_i = c), \quad \text{confidence} = \frac{1}{|\mathcal{D}|} \sum_{i \in \mathcal{D}} \mathbb{I}(y_i = \hat{y})$$
+
+---
+
+## 2.7 Mathematical Formulation: Random Forest Ensemble (`RandomForest`)
+
+To eliminate variance and prevent overfitting on anomalous page structures, Scrapi v2.0 implements **Bootstrap Aggregated (Bagging) Random Forests** with feature subsampling.
+
+### 1. Bagging & Feature Subsampling
+Given $B$ constituent trees $\{T_1, T_2, \dots, T_B\}$:
+- Each tree $T_b$ is trained on a bootstrap sample $\mathcal{D}_b^*$ drawn with replacement from $\mathcal{D}$ ($|\mathcal{D}_b^*| = \lfloor \gamma N \rfloor$, default $\gamma = 0.8$).
+- At each split candidate, only a random subset of features $M_{\text{sub}} = \lceil\sqrt{M}\rceil$ is evaluated.
+
+### 2. Ensemble Majority Voting & Confidence
+$$\hat{y}_{\text{forest}}(\mathbf{x}) = \arg\max_{c \in \mathcal{Y}} \sum_{b=1}^B \mathbb{I}(T_b(\mathbf{x}) = c)$$
+$$\text{Confidence}(\mathbf{x}) = \frac{1}{B} \sum_{b=1}^B \mathbb{I}(T_b(\mathbf{x}) = \hat{y}_{\text{forest}})$$
+
+### 3. Mean Decrease in Impurity (MDI) Feature Importance
+Feature importance $\mathcal{I}(X_j)$ is computed across the ensemble by weighting sample counts inversely by tree depth:
+$$\mathcal{I}(X_j) = \frac{\sum_{b=1}^B \sum_{u \in V_I(T_b) \mid \text{feature}(u) = X_j} \frac{N_u}{d_u + 1}}{\sum_{\text{all internal nodes } v} \frac{N_v}{d_v + 1}}$$
+Normalized such that $\sum_{j=1}^M \mathcal{I}(X_j) = 1.0$.
+
+---
+
+## 2.8 Depth-Calibrated Adaptive Confidence Decay
+
+In deep heuristic decision chains, prolonged traversal paths through multiple fallbacks signify edge-case documents that deviate from canonical archetypes. Scrapi v2.0 formalizes this with **Depth-Calibrated Adaptive Confidence Decay**:
+
+$$c_{\text{adjusted}}(\mathbf{x}) = c_{\text{leaf}} \cdot \max\left( \delta_{\min},\ 1.0 - \max(0, D(\mathbf{x}) - D_{\text{nominal}}) \cdot \kappa \right)$$
+
+Where:
+- $c_{\text{leaf}} \in [0, 1]$ is the empirical posterior leaf confidence.
+- $D(\mathbf{x})$ is the observed traversal depth for input $\mathbf{x}$.
+- $D_{\text{nominal}} = 6$ is the nominal baseline depth threshold below which zero decay occurs.
+- $\kappa = 0.01$ is the linear depth decay coefficient per step past nominal.
+- $\delta_{\min} = 0.85$ is the floor bounding maximum penalty at $15\%$.
