@@ -3,6 +3,7 @@ output/
 data/
 data_test/
 output_test/
+test_output/
 data_test_arch/
 .env
 urls.txt
