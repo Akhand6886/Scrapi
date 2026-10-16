@@ -113,12 +113,24 @@ node src/cli.js spider https://example.com -d 3 -m 50 -c 4 --delay 500
 node src/cli.js spider https://example.com --resume example.com-spider
 ```
 
-### 5. Category-Targeted Crawling
+### 5. Exhaustive Topic-Based Crawling (Earliest Available to Current Date)
+```bash
+# Automatically discover and scrape all content within a topic/category without artificial limits
+node src/cli.js topic https://example.com "Analysis"
+
+# Full crawl with sitemap discovery and media download
+node src/cli.js topic https://example.com "AI Research" --download-media --concurrency 4
+
+# Resume an interrupted topic crawl from SQLite checkpoint
+node src/cli.js topic https://example.com "Analysis" --resume example.com-analysis-topic-crawl
+```
+
+### 6. Category-Targeted Crawling
 ```bash
 node src/cli.js crawl https://example.com -s "div.post-card a" --category blog
 ```
 
-### 6. Web Dashboard UI
+### 7. Web Dashboard UI
 ```bash
 node src/cli.js serve --port 3000
 ```
@@ -147,4 +159,13 @@ const healed = response.adaptive({
   classes: ['post-entry']
 });
 console.log('Target element:', healed.element.text);
+
+// Exhaustive Topic-Based Crawling (Earliest to Current Date)
+import { runTopicCrawl } from 'scrapi';
+
+const result = await runTopicCrawl('https://example.com', 'Analysis', {
+  concurrency: 2,
+  onProgress: (p) => console.log(p.message)
+});
+console.log(`Crawl finished! ${result.succeeded} articles extracted between ${result.dateCoverage.earliestDate} and ${result.dateCoverage.latestDate}`);
 ```

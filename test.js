@@ -9,7 +9,8 @@ const testFiles = [
   'test_scrapling_arch.js',
   'test_spider.js',
   'test_optimizations.js',
-  'test_category_crawl.js'
+  'test_category_crawl.js',
+  'test_topic_crawl.js'
 ];
 
 async function runAll() {

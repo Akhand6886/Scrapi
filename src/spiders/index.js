@@ -1,5 +1,9 @@
 export { Spider } from './spider.js';
 export { CrawlEngine } from './engine.js';
+export { TopicCrawler, runTopicCrawl } from './topic_crawler.js';
+export { PaginationEngine } from './pagination.js';
+export { SitemapEngine } from './sitemap.js';
+export { TopicMatcher } from './topic_matcher.js';
 
 /**
  * High-level helper to run spider.

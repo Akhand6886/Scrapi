@@ -7,7 +7,7 @@ import { Command } from 'commander';
 import chalk from 'chalk';
 import ora from 'ora';
 import * as cheerio from 'cheerio';
-import { scrapePage, fetchHtml } from './scraper.js';
+import { scrapePage, fetchHtml, discoverCategories } from './scraper.js';
 import { 
   initStorage, 
   insertScrape, 
@@ -20,6 +20,7 @@ import {
 } from './storage.js';
 import { extractData, summarizeContent, groupScrapes } from './llm.js';
 import { runSpider } from './spider.js';
+import { runTopicCrawl } from './spiders/index.js';
 import { startShell } from './cli/shell.js';
 import { globalFetcherPool } from './fetchers/index.js';
 import { runBenchmarks } from './benchmark/index.js';
@@ -491,8 +492,43 @@ program
   .option('--schema <name>', 'Use Zod schema (article, product, event, contact)', 'custom')
   .option('--output-json', 'Save structured JSON alongside Markdown', false)
   .option('--no-cache', 'Bypass HTTP cache and force fresh request', false)
+  .option('--topic <name>', 'Topic or category name to filter and crawl exhaustively')
+  .option('--exhaustive', 'Exhaustive crawl from earliest available content to current date', false)
+  .option('--sitemap', 'Discover historical sitemaps', false)
   .action(async (url, options) => {
     await initStorage(undefined, options.output);
+
+    // If --topic is specified, redirect to TopicCrawler with dual-frontier architecture
+    if (options.topic) {
+      console.log(chalk.bold.cyan(`\n🕷️ Starting topic-aware crawl for [${options.topic}] on ${url}...`));
+      try {
+        const stats = await runTopicCrawl(url, options.topic, {
+          ...options,
+          exhaustive: options.exhaustive,
+          category: options.category || options.topic
+        }, (evt) => {
+          if (evt.type === 'log') {
+            console.log(chalk.gray(evt.message));
+          }
+        });
+
+        console.log(chalk.bold.green(`\n✓ Topic crawl completed successfully!`));
+        console.log(chalk.cyan(`   Topic:              ${stats.topic}`));
+        console.log(chalk.green(`   Successful Scrapes: ${stats.succeeded}`));
+        console.log(chalk.yellow(`   Skipped Existing:   ${stats.skippedExisting}`));
+        console.log(chalk.red(`   Failed/Error Pages: ${stats.failed}`));
+        if (stats.dateCoverage && stats.dateCoverage.earliestDate) {
+          console.log(chalk.magenta(`   Dynamic Date Range: ${stats.dateCoverage.earliestDate} ➔ ${stats.dateCoverage.latestDate}`));
+        }
+      } catch (err) {
+        console.error(chalk.red(`Topic crawl failed: ${err.message}`));
+        process.exit(1);
+      } finally {
+        await globalFetcherPool.close();
+      }
+      return;
+    }
+
     const spinner = ora(`Fetching list page: ${chalk.cyan(url)}...`).start();
     try {
       const html = await fetchHtml(url, { noCache: !!options.noCache, fetcher: options.fetcher });
@@ -570,6 +606,114 @@ program
       console.log(chalk.bold.green(`\n✓ Crawl completed! Successfully scraped ${successfullyScraped.length}/${urls.length} pages.`));
     } catch (err) {
       handleError(err, spinner);
+    } finally {
+      await globalFetcherPool.close();
+    }
+  });
+
+// Topic command: Exhaustive, intelligent, topic-based website crawling
+program
+  .command('topic <url> [topic]')
+  .description('Exhaustively crawl and scrape all content within a website topic/category from earliest published to current date')
+  .option('-f, --fetcher <type>', 'Fetcher tier: auto (Decision Tree), static, dynamic, or stealth', 'auto')
+  .option('-o, --output <dir>', 'Directory to save Markdown files', './output')
+  .option('-c, --concurrency <number>', 'Number of parallel scraper workers', '2')
+  .option('-m, --max-pages <number>', 'Maximum page limit (defaults to unlimited for exhaustive mode)', 'Infinity')
+  .option('-d, --depth <number>', 'Maximum depth level', 'Infinity')
+  .option('--delay <ms>', 'Polite rate-limiting delay between requests in milliseconds', '1000')
+  .option('--no-sitemap', 'Disable historical XML sitemap discovery', false)
+  .option('--images', 'Include image alt text in output', false)
+  .option('--download-media', 'Download images to local media directory', false)
+  .option('--no-meta', 'Skip YAML frontmatter block', false)
+  .option('--no-db', 'Skip SQLite database insert', false)
+  .option('--timeout <ms>', 'Request timeout in milliseconds', '15000')
+  .option('--no-cache', 'Bypass HTTP cache and force fresh requests', false)
+  .option('--resume <jobId>', 'Resume crawl from a saved checkpoint ID')
+  .action(async (url, topic, options) => {
+    await initStorage(undefined, options.output);
+    let targetTopic = topic;
+
+    // If topic is not provided, automatically discover topics/categories on the site
+    if (!targetTopic) {
+      const probeSpinner = ora(`Auto-discovering categories on ${chalk.cyan(url)}...`).start();
+      try {
+        const categories = await discoverCategories(url);
+        probeSpinner.stop();
+        if (categories && categories.length > 0) {
+          console.log(chalk.bold.cyan(`\nDiscovered ${categories.length} categories on ${url}:`));
+          categories.slice(0, 10).forEach((cat, idx) => {
+            console.log(chalk.gray(`  [${idx + 1}] `) + chalk.white.bold(cat.name) + chalk.gray(` ➔ ${cat.url}`));
+          });
+          targetTopic = categories[0].name;
+          console.log(chalk.yellow(`\nAuto-selected first topic: "${chalk.bold(targetTopic)}"`));
+        } else {
+          targetTopic = new URL(url).hostname;
+          console.log(chalk.yellow(`No explicit categories found. Defaulting to: "${targetTopic}"`));
+        }
+      } catch (err) {
+        probeSpinner.fail(chalk.red(`Failed to discover categories: ${err.message}`));
+        targetTopic = new URL(url).hostname;
+      }
+    }
+
+    const hostName = new URL(url).hostname;
+    const topicOptions = {
+      ...options,
+      exhaustive: true,
+      maxPages: options.maxPages === 'Infinity' ? Infinity : parseInt(options.maxPages, 10),
+      depth: options.depth === 'Infinity' ? Infinity : parseInt(options.depth, 10),
+      concurrency: parseInt(options.concurrency, 10),
+      delay: parseInt(options.delay, 10),
+      sitemap: options.sitemap !== false,
+      jobId: options.resume || `${hostName}-${targetTopic.toLowerCase().replace(/[^a-z0-9]+/g, '-')}-topic`
+    };
+
+    console.log(chalk.bold.cyan(`\n🕷️ Launching Scrapi v2.0 Exhaustive Topic Crawler`));
+    console.log(chalk.gray(`   Target URL:      ${url}`));
+    console.log(chalk.gray(`   Selected Topic:  ${chalk.bold.white(targetTopic)}`));
+    console.log(chalk.gray(`   Date Coverage:   Earliest available ➔ Current Date (Dynamic)`));
+    console.log(chalk.gray(`   Fetcher Tier:    ${options.fetcher.toUpperCase()}`));
+    console.log(chalk.gray(`   Concurrency:     ${topicOptions.concurrency} | Delay: ${topicOptions.delay}ms\n`));
+
+    try {
+      const stats = await runTopicCrawl(url, targetTopic, topicOptions, (evt) => {
+        if (evt.type === 'log') {
+          console.log(chalk.gray(evt.message));
+        }
+      });
+
+      console.log(chalk.bold.green(`\n✓ Exhaustive Topic Crawl Complete!`));
+      console.log(chalk.cyan(`   Topic:               ${chalk.bold.white(stats.topic)}`));
+      console.log(chalk.cyan(`   Entrypoint:          ${stats.entrypoint}`));
+      console.log(chalk.green(`   Articles Scraped:    ${stats.succeeded}`));
+      console.log(chalk.yellow(`   Skipped (Existing):  ${stats.skippedExisting}`));
+      console.log(chalk.red(`   Failed/Inaccessible: ${stats.failed}`));
+
+      if (stats.dateCoverage && stats.dateCoverage.earliestDate) {
+        console.log(chalk.magenta.bold(`\n📅 Dynamic Date Coverage Report:`));
+        console.log(chalk.white(`   Earliest Article:    ${chalk.bold(stats.dateCoverage.earliestDate)}`));
+        console.log(chalk.white(`   Latest Article:      ${chalk.bold(stats.dateCoverage.latestDate)}`));
+        console.log(chalk.white(`   Articles with Dates: ${stats.dateCoverage.totalWithDates}`));
+        if (stats.dateCoverage.byYear && Object.keys(stats.dateCoverage.byYear).length > 0) {
+          console.log(chalk.white(`   Chronological Distribution:`));
+          Object.entries(stats.dateCoverage.byYear)
+            .sort((a, b) => a[0].localeCompare(b[0]))
+            .forEach(([year, count]) => {
+              console.log(chalk.gray(`     • ${year}: ${count} articles`));
+            });
+        }
+      }
+
+      if (stats.failedUrls && stats.failedUrls.length > 0) {
+        console.log(chalk.red(`\n⚠️ ${stats.failedUrls.length} Inaccessible/Failed URLs recorded to SQLite:`));
+        stats.failedUrls.slice(0, 5).forEach(f => {
+          console.log(chalk.red(`   - ${f.url} (${f.error})`));
+        });
+      }
+      console.log('');
+    } catch (err) {
+      console.error(chalk.red(`\n✖ Exhaustive crawl encountered fatal error: ${err.message}`));
+      process.exit(1);
     } finally {
       await globalFetcherPool.close();
     }

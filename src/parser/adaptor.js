@@ -292,7 +292,7 @@ export class Response {
         if (!isNaN(parsedDate.getTime()) && parsedDate.getFullYear() >= 1990 && parsedDate.getFullYear() <= 2099) {
           dateStr = parsedDate.toISOString().split('T')[0];
         } else {
-          const match = String(rawDate).match(/\b(19\d\d|20\d\d)[/-](0[1-9]|1[0-2])([/-](0[1-9]|[12]\d|3[01]))?\b/);
+          const match = String(rawDate).match(/\b(19\d\d|20\d\d)[/-](0[1-9]|1[0-2])(?:[/-](0[1-9]|[12]\d|3[01]))?\b/);
           if (match) {
             dateStr = `${match[1]}-${match[2]}-${match[3] || '01'}`;
           }
@@ -301,7 +301,7 @@ export class Response {
     }
 
     if (!dateStr && this.url) {
-      const urlDateMatch = this.url.match(/\b(19\d\d|20\d\d)[/-](0[1-9]|1[0-2])([/-](0[1-9]|[12]\d|3[01]))?\b/);
+      const urlDateMatch = this.url.match(/\b(19\d\d|20\d\d)[/-](0[1-9]|1[0-2])(?:[/-](0[1-9]|[12]\d|3[01]))?\b/);
       if (urlDateMatch) {
         dateStr = `${urlDateMatch[1]}-${urlDateMatch[2]}-${urlDateMatch[3] || '01'}`;
         rawDate = rawDate || dateStr;

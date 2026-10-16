@@ -21,6 +21,7 @@ import {
 } from '../storage.js';
 import { scrapePage, discoverCategories, autoDetectLinkSelector } from '../scraper.js';
 import { runSpider } from '../spider.js';
+import { runTopicCrawl } from '../spiders/index.js';
 import { globalFetcherPool } from '../fetchers/index.js';
 import { AdaptiveEngine } from '../parser/index.js';
 import * as cheerio from 'cheerio';
@@ -44,6 +45,30 @@ let activeSpider = {
     queued: 0,
     succeeded: 0,
     failed: 0
+  },
+  logs: [],
+  pages: [],
+  promise: null,
+  aborted: false,
+  options: null
+};
+
+// Global state tracking the active exhaustive topic crawl
+let activeTopicCrawl = {
+  running: false,
+  seedUrl: '',
+  topic: '',
+  stats: {
+    visited: 0,
+    queued: 0,
+    succeeded: 0,
+    failed: 0,
+    skippedExisting: 0
+  },
+  dateCoverage: {
+    earliestDate: null,
+    latestDate: null,
+    byYear: {}
   },
   logs: [],
   pages: [],
@@ -428,6 +453,146 @@ app.post('/api/spider/cancel', (req, res) => {
   activeSpider.aborted = true;
   activeSpider.logs.push('[System] Crawl cancellation signal received. Halting workers...');
   res.json({ success: true, message: 'Spider cancelled' });
+});
+
+// ──────────────────────────────────────────
+// Exhaustive Topic Crawl Endpoints
+// ──────────────────────────────────────────
+
+// POST discover categories/topics for a URL
+app.post('/api/topic/discover', async (req, res) => {
+  const { url } = req.body;
+  if (!url) {
+    return res.status(400).json({ error: 'Missing url' });
+  }
+  try {
+    const categories = await discoverCategories(url);
+    res.json({ categories });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// POST start exhaustive topic crawl
+app.post('/api/topic/crawl', async (req, res) => {
+  const { url, topic, concurrency, delay, sitemap, fetcher, resume } = req.body;
+  if (!url || !topic) {
+    return res.status(400).json({ error: 'Missing url or topic parameter' });
+  }
+
+  if (activeTopicCrawl.running) {
+    return res.status(400).json({ error: 'A topic crawl job is already currently running.' });
+  }
+
+  const hostName = new URL(url).hostname;
+  const currentJobId = `${hostName}-${topic.toLowerCase().replace(/[^a-z0-9]+/g, '-')}-topic`;
+
+  const topicOptions = {
+    exhaustive: true,
+    concurrency: concurrency !== undefined ? parseInt(concurrency, 10) : 2,
+    delay: delay !== undefined ? parseInt(delay, 10) : 1000,
+    sitemap: sitemap !== false,
+    fetcher: fetcher || 'auto',
+    jobId: currentJobId,
+    resume: !!resume,
+    aborted: false
+  };
+
+  activeTopicCrawl.running = true;
+  activeTopicCrawl.seedUrl = url;
+  activeTopicCrawl.topic = topic;
+  activeTopicCrawl.aborted = false;
+  activeTopicCrawl.options = topicOptions;
+  activeTopicCrawl.stats = { visited: 0, queued: 0, succeeded: 0, failed: 0, skippedExisting: 0 };
+  activeTopicCrawl.dateCoverage = { earliestDate: null, latestDate: null, byYear: {} };
+  activeTopicCrawl.pages = [];
+  activeTopicCrawl.logs = [
+    `[TopicCrawl] Initialized exhaustive crawl for [${topic}] on ${url}`,
+    `[TopicCrawl] Dynamic Date Coverage: Earliest available ➔ Present`
+  ];
+
+  activeTopicCrawl.promise = runTopicCrawl(url, topic, topicOptions, (evt) => {
+    if (evt.type === 'log') {
+      activeTopicCrawl.logs.push(evt.message);
+      if (activeTopicCrawl.logs.length > 300) activeTopicCrawl.logs.shift();
+
+      if (evt.message.includes('✓ Success:') && evt.message.includes('➔')) {
+        const parts = evt.message.split('➔');
+        const filename = parts[1] ? parts[1].trim() : '';
+        activeTopicCrawl.pages.unshift({
+          filename,
+          time: new Date().toLocaleTimeString(),
+          status: 'success'
+        });
+        if (activeTopicCrawl.pages.length > 100) activeTopicCrawl.pages.pop();
+      }
+    } else if (evt.type === 'progress') {
+      activeTopicCrawl.stats = evt.stats;
+      if (evt.stats.earliestDate) {
+        activeTopicCrawl.dateCoverage.earliestDate = evt.stats.earliestDate;
+      }
+      if (evt.stats.latestDate) {
+        activeTopicCrawl.dateCoverage.latestDate = evt.stats.latestDate;
+      }
+    }
+  }).then((results) => {
+    activeTopicCrawl.running = false;
+    activeTopicCrawl.stats.succeeded = results.succeeded;
+    activeTopicCrawl.stats.failed = results.failed;
+    activeTopicCrawl.stats.skippedExisting = results.skippedExisting;
+    if (results.dateCoverage) {
+      activeTopicCrawl.dateCoverage = results.dateCoverage;
+    }
+    activeTopicCrawl.logs.push(
+      `[TopicCrawl] Exhaustive crawl completed! ${results.succeeded} scraped, ${results.skippedExisting} skipped existing, ${results.failed} failed.`
+    );
+  }).catch((err) => {
+    activeTopicCrawl.running = false;
+    activeTopicCrawl.logs.push(`[TopicCrawl] Error encountered: ${err.message}`);
+  });
+
+  res.json({ success: true, message: 'Exhaustive topic crawl started', jobId: currentJobId });
+});
+
+// GET active topic crawl status
+app.get('/api/topic/status', (req, res) => {
+  res.json({
+    running: activeTopicCrawl.running,
+    seedUrl: activeTopicCrawl.seedUrl,
+    topic: activeTopicCrawl.topic,
+    stats: activeTopicCrawl.stats,
+    dateCoverage: activeTopicCrawl.dateCoverage,
+    logs: activeTopicCrawl.logs,
+    pages: activeTopicCrawl.pages,
+    aborted: activeTopicCrawl.aborted,
+    options: activeTopicCrawl.options
+  });
+});
+
+// POST pause active topic crawl
+app.post('/api/topic/pause', (req, res) => {
+  if (!activeTopicCrawl.running) {
+    return res.status(400).json({ error: 'No topic crawl is running.' });
+  }
+  if (activeTopicCrawl.options) {
+    activeTopicCrawl.options.aborted = true;
+  }
+  activeTopicCrawl.aborted = true;
+  activeTopicCrawl.logs.push('[TopicCrawl] Pause signal dispatched. Checkpoint state being saved...');
+  res.json({ success: true, message: 'Topic crawl pause dispatched' });
+});
+
+// POST cancel active topic crawl
+app.post('/api/topic/cancel', (req, res) => {
+  if (!activeTopicCrawl.running) {
+    return res.status(400).json({ error: 'No topic crawl is running.' });
+  }
+  if (activeTopicCrawl.options) {
+    activeTopicCrawl.options.aborted = true;
+  }
+  activeTopicCrawl.aborted = true;
+  activeTopicCrawl.logs.push('[TopicCrawl] Cancel signal dispatched. Halting workers...');
+  res.json({ success: true, message: 'Topic crawl cancelled' });
 });
 
 // GET element fingerprints

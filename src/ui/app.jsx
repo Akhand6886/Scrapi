@@ -64,8 +64,20 @@ function App() {
   const [batchConcurrency, setBatchConcurrency] = useState(2);
   const [batchDelay, setBatchDelay] = useState(1500);
   const [discoveredCategories, setDiscoveredCategories] = useState([]);
+  const [discoveringCategories, setDiscoveringCategories] = useState(false);
   const [syncingCategories, setSyncingCategories] = useState(false);
   const [autoDetecting, setAutoDetecting] = useState(false);
+
+  // Exhaustive Topic Crawl State
+  const [topicInput, setTopicInput] = useState('');
+  const [topicActive, setTopicActive] = useState(false);
+  const [topicStats, setTopicStats] = useState({ visited: 0, queued: 0, succeeded: 0, failed: 0, skippedExisting: 0 });
+  const [topicDateCoverage, setTopicDateCoverage] = useState({ earliestDate: null, latestDate: null, byYear: {} });
+  const [topicLogs, setTopicLogs] = useState([]);
+  const [topicPages, setTopicPages] = useState([]);
+  const [topicConcurrency, setTopicConcurrency] = useState(2);
+  const [topicDelay, setTopicDelay] = useState(1000);
+  const [topicSitemap, setTopicSitemap] = useState(true);
 
   // Active Tab ('iframe' | 'markdown' | 'query' | 'adaptive')
   const [activeTab, setActiveTab] = useState('iframe');
@@ -174,6 +186,20 @@ function App() {
         }
       }).catch(err => {});
 
+    // Check active topic crawl status on boot
+    safeFetchJson('/api/topic/status')
+      .then(data => {
+        if (data.running) {
+          setTopicActive(true);
+          setTopicStats(data.stats || { visited: 0, queued: 0, succeeded: 0, failed: 0, skippedExisting: 0 });
+          setTopicDateCoverage(data.dateCoverage || { earliestDate: null, latestDate: null, byYear: {} });
+          setTopicLogs(data.logs || []);
+          setTopicPages(data.pages || []);
+          if (data.topic) setTopicInput(data.topic);
+          setConsoleMode('topic');
+        }
+      }).catch(err => {});
+
     // Listen for element clicks inside proxy iframe
     const handleIframeMessage = (event) => {
       if (event.data) {
@@ -224,6 +250,30 @@ function App() {
       if (timer) clearInterval(timer);
     };
   }, [spiderActive]);
+
+  // Topic crawl status polling
+  useEffect(() => {
+    let timer = null;
+    if (topicActive) {
+      timer = setInterval(async () => {
+        try {
+          const data = await safeFetchJson('/api/topic/status');
+          setTopicStats(data.stats || { visited: 0, queued: 0, succeeded: 0, failed: 0, skippedExisting: 0 });
+          setTopicDateCoverage(data.dateCoverage || { earliestDate: null, latestDate: null, byYear: {} });
+          setTopicLogs(data.logs || []);
+          setTopicPages(data.pages || []);
+          if (!data.running) {
+            setTopicActive(false);
+            showToast('Exhaustive topic crawl completed!', 'success');
+            loadData();
+          }
+        } catch (err) {}
+      }, 1000);
+    }
+    return () => {
+      if (timer) clearInterval(timer);
+    };
+  }, [topicActive]);
 
   // Load Proxy Page
   const handleLoadProxy = () => {
@@ -323,6 +373,93 @@ function App() {
     try {
       await safeFetchJson('/api/spider/cancel', { method: 'POST' });
       showToast('Crawl cancellation signal sent.', 'info');
+      setTimeout(loadData, 1500);
+    } catch (err) {
+      showToast(err.message, 'error');
+    }
+  };
+
+  // Discover Topics / Categories on Website
+  const handleDiscoverTopics = async () => {
+    if (!url) {
+      showToast('Please enter a target website URL first.', 'error');
+      return;
+    }
+    setDiscoveringCategories(true);
+    try {
+      const data = await safeFetchJson('/api/topic/discover', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ url })
+      });
+      setDiscoveredCategories(data.categories || []);
+      if (data.categories && data.categories.length > 0) {
+        showToast(`Discovered ${data.categories.length} categories on site!`, 'success');
+        if (!topicInput) {
+          setTopicInput(data.categories[0].name);
+        }
+      } else {
+        showToast('No standard categories detected. Enter topic name manually.', 'info');
+      }
+    } catch (err) {
+      showToast(err.message, 'error');
+    } finally {
+      setDiscoveringCategories(false);
+    }
+  };
+
+  // Start Exhaustive Topic Crawl
+  const handleStartTopicCrawl = async (resumeJobId = null) => {
+    if (!url && !resumeJobId) {
+      showToast('Please enter target website URL first.', 'error');
+      return;
+    }
+    if (!topicInput && !resumeJobId) {
+      showToast('Please enter a topic or category name first.', 'error');
+      return;
+    }
+
+    setTopicActive(true);
+    setTopicLogs(['[System] Initializing Exhaustive Topic Crawler...']);
+    setTopicPages([]);
+
+    try {
+      await safeFetchJson('/api/topic/crawl', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          url,
+          topic: topicInput,
+          concurrency: parseInt(topicConcurrency, 10),
+          delay: parseInt(topicDelay, 10),
+          sitemap: topicSitemap,
+          fetcher: renderMode,
+          resume: !!resumeJobId
+        })
+      });
+      showToast(`Exhaustive topic crawl launched for [${topicInput}]!`, 'success');
+    } catch (err) {
+      showToast(err.message, 'error');
+      setTopicActive(false);
+    }
+  };
+
+  // Pause & Save Topic Crawl Checkpoint
+  const handlePauseTopicCrawl = async () => {
+    try {
+      await safeFetchJson('/api/topic/pause', { method: 'POST' });
+      showToast('Pause signal dispatched. Checkpoint state being saved...', 'info');
+      setTimeout(loadData, 1500);
+    } catch (err) {
+      showToast(err.message, 'error');
+    }
+  };
+
+  // Cancel Running Topic Crawl
+  const handleCancelTopicCrawl = async () => {
+    try {
+      await safeFetchJson('/api/topic/cancel', { method: 'POST' });
+      showToast('Topic crawl cancellation dispatched.', 'info');
       setTimeout(loadData, 1500);
     } catch (err) {
       showToast(err.message, 'error');
@@ -672,24 +809,30 @@ function App() {
           {/* Console Mode Switcher */}
           <div class="space-y-1.5 shrink-0">
             <label class="text-[10px] text-slate-400 uppercase tracking-widest font-bold">Console Mode</label>
-            <div class="flex bg-slate-900/80 rounded-xl p-1 border border-white/10">
+            <div class="grid grid-cols-4 gap-1 bg-slate-900/80 rounded-xl p-1 border border-white/10">
               <button
                 onClick={() => setConsoleMode('single')}
-                class={`flex-1 py-1.5 text-xs font-bold rounded-lg transition-all ${consoleMode === 'single' ? 'bg-blue-600 text-white shadow-lg' : 'text-slate-400 hover:text-slate-200'}`}
+                class={`py-1.5 text-[10px] font-bold rounded-lg transition-all ${consoleMode === 'single' ? 'bg-blue-600 text-white shadow-lg' : 'text-slate-400 hover:text-slate-200'}`}
               >
-                🕷️ Single Page
+                🕷️ Single
+              </button>
+              <button
+                onClick={() => setConsoleMode('topic')}
+                class={`py-1.5 text-[10px] font-bold rounded-lg transition-all ${consoleMode === 'topic' ? 'bg-emerald-600 text-white shadow-lg' : 'text-slate-400 hover:text-slate-200'}`}
+              >
+                🏷️ Topic
               </button>
               <button
                 onClick={() => setConsoleMode('batch')}
-                class={`flex-1 py-1.5 text-xs font-bold rounded-lg transition-all ${consoleMode === 'batch' ? 'bg-blue-600 text-white shadow-lg' : 'text-slate-400 hover:text-slate-200'}`}
+                class={`py-1.5 text-[10px] font-bold rounded-lg transition-all ${consoleMode === 'batch' ? 'bg-blue-600 text-white shadow-lg' : 'text-slate-400 hover:text-slate-200'}`}
               >
-                ⚡ Link Batch
+                ⚡ Batch
               </button>
               <button
                 onClick={() => setConsoleMode('spider')}
-                class={`flex-1 py-1.5 text-xs font-bold rounded-lg transition-all ${consoleMode === 'spider' ? 'bg-indigo-600 text-white shadow-lg' : 'text-slate-400 hover:text-slate-200'}`}
+                class={`py-1.5 text-[10px] font-bold rounded-lg transition-all ${consoleMode === 'spider' ? 'bg-indigo-600 text-white shadow-lg' : 'text-slate-400 hover:text-slate-200'}`}
               >
-                🕸️ Site Spider
+                🕸️ Spider
               </button>
             </div>
           </div>
@@ -894,7 +1037,192 @@ function App() {
             </div>
           )}
 
-          {/* Mode 2: Link Batch */}
+          {/* Mode Topic: Exhaustive Topic Crawl (Earliest ➔ Present) */}
+          {consoleMode === 'topic' && (
+            <div class="space-y-4 animate-fade-in">
+              <div class="space-y-2">
+                <div class="flex justify-between items-center">
+                  <label class="text-xs text-slate-400 font-medium">Website URL</label>
+                  <button 
+                    onClick={handleDiscoverTopics}
+                    disabled={discoveringCategories || !url}
+                    class="text-[10px] text-emerald-400 hover:underline flex items-center space-x-1"
+                  >
+                    <span>{discoveringCategories ? 'Discovering...' : '🔍 Auto-Detect Categories'}</span>
+                  </button>
+                </div>
+                <input 
+                  type="url" 
+                  placeholder="https://example.com" 
+                  value={url} 
+                  onChange={e => setUrl(e.target.value)}
+                  class="w-full px-3 py-2 bg-slate-900 border border-white/10 rounded-xl text-sm text-slate-200 placeholder-slate-500 focus:outline-none focus:border-emerald-500"
+                />
+              </div>
+
+              {/* Discovered Topic Pills */}
+              {discoveredCategories.length > 0 && (
+                <div class="space-y-1.5 bg-slate-900/60 p-2.5 rounded-xl border border-white/5">
+                  <span class="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Discovered Site Categories:</span>
+                  <div class="flex flex-wrap gap-1.5 max-h-24 overflow-y-auto custom-scrollbar pt-1">
+                    {discoveredCategories.map((cat, i) => (
+                      <button
+                        key={i}
+                        onClick={() => setTopicInput(cat.name)}
+                        class={`px-2 py-0.5 text-[10px] rounded-lg border transition-all ${
+                          topicInput.toLowerCase() === cat.name.toLowerCase()
+                            ? 'bg-emerald-600 text-white border-emerald-400 font-bold shadow'
+                            : 'bg-slate-950/80 text-slate-300 border-white/10 hover:border-emerald-500/50'
+                        }`}
+                      >
+                        {cat.name}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              <div class="space-y-2">
+                <label class="text-xs text-slate-400 font-medium">Target Topic / Category</label>
+                <input 
+                  type="text" 
+                  placeholder="e.g. Analysis, Engineering, AI, Markets" 
+                  value={topicInput} 
+                  onChange={e => setTopicInput(e.target.value)}
+                  class="w-full px-3 py-2 bg-slate-900 border border-white/10 rounded-xl text-sm text-emerald-300 font-semibold focus:outline-none focus:border-emerald-500"
+                />
+              </div>
+
+              <div class="grid grid-cols-2 gap-2">
+                <div class="space-y-1">
+                  <label class="text-[10px] text-slate-400 font-medium">Concurrency</label>
+                  <input 
+                    type="number" 
+                    value={topicConcurrency} 
+                    onChange={e => setTopicConcurrency(e.target.value)}
+                    class="w-full px-2.5 py-1.5 bg-slate-900 border border-white/10 rounded-xl text-xs text-slate-200"
+                  />
+                </div>
+                <div class="space-y-1">
+                  <label class="text-[10px] text-slate-400 font-medium">Delay (ms)</label>
+                  <input 
+                    type="number" 
+                    value={topicDelay} 
+                    onChange={e => setTopicDelay(e.target.value)}
+                    class="w-full px-2.5 py-1.5 bg-slate-900 border border-white/10 rounded-xl text-xs text-slate-200"
+                  />
+                </div>
+              </div>
+
+              <div class="flex items-center space-x-2 pt-1">
+                <label class="flex items-center text-xs text-slate-300 cursor-pointer">
+                  <input 
+                    type="checkbox" 
+                    checked={topicSitemap} 
+                    onChange={e => setTopicSitemap(e.target.checked)}
+                    class="rounded bg-slate-900 border-white/10 text-emerald-500 mr-2"
+                  />
+                  <span>Probe XML Sitemaps for Historical Archives</span>
+                </label>
+              </div>
+
+              {/* Topic Crawl Control Buttons */}
+              <div class="space-y-2 pt-1">
+                {!topicActive ? (
+                  <button 
+                    onClick={() => handleStartTopicCrawl()} 
+                    class="w-full py-2.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl text-xs font-bold transition-all shadow-lg shadow-emerald-600/20 active:scale-95 flex items-center justify-center space-x-1.5"
+                  >
+                    <span>🚀</span>
+                    <span>Start Exhaustive Topic Crawl</span>
+                  </button>
+                ) : (
+                  <div class="grid grid-cols-2 gap-2">
+                    <button
+                      onClick={handlePauseTopicCrawl}
+                      class="py-2 bg-amber-600 hover:bg-amber-500 text-white rounded-xl text-xs font-bold transition-all active:scale-95 flex items-center justify-center shadow-lg"
+                      title="Pause crawl and save checkpoint state"
+                    >
+                      <span class="mr-1">⏸️</span> Pause & Save
+                    </button>
+                    <button
+                      onClick={handleCancelTopicCrawl}
+                      class="py-2 bg-red-600 hover:bg-red-500 text-white rounded-xl text-xs font-bold transition-all active:scale-95 flex items-center justify-center shadow-lg"
+                      title="Stop crawl"
+                    >
+                      <span class="mr-1">🛑</span> Stop
+                    </button>
+                  </div>
+                )}
+              </div>
+
+              {/* Live Topic Crawl Metrics & Dynamic Date Coverage Banner */}
+              {(topicActive || topicLogs.length > 0) && (
+                <div class="space-y-3 bg-slate-900/90 border border-emerald-500/20 p-3.5 rounded-xl animate-fade-in">
+                  <div class="flex justify-between items-center">
+                    <span class="text-xs font-bold text-slate-200">Topic Crawl Progress</span>
+                    <span class={`text-[9px] font-bold px-2 py-0.5 rounded-full ${topicActive ? 'bg-emerald-500/20 text-emerald-300 animate-pulse' : 'bg-blue-500/20 text-blue-300'}`}>
+                      {topicActive ? 'CRAWLING' : 'FINISHED'}
+                    </span>
+                  </div>
+
+                  {/* Dynamic Date Coverage Alert Banner */}
+                  {topicDateCoverage.earliestDate && (
+                    <div class="p-2 bg-emerald-950/40 border border-emerald-500/30 rounded-lg text-[10px] space-y-1">
+                      <div class="font-bold text-emerald-300 flex items-center space-x-1">
+                        <span>📅 Dynamic Date Range:</span>
+                        <span class="text-white font-mono">{topicDateCoverage.earliestDate} ➔ {topicDateCoverage.latestDate || 'Present'}</span>
+                      </div>
+                      <div class="text-slate-400 text-[9px]">
+                        Earliest discovered publication up to current date.
+                      </div>
+                    </div>
+                  )}
+
+                  <div class="grid grid-cols-4 gap-1.5 text-center">
+                    <div class="bg-slate-950 p-2 rounded-lg border border-white/5">
+                      <div class="text-[9px] text-slate-400">Visited</div>
+                      <div class="text-xs font-bold text-slate-100">{topicStats.visited}</div>
+                    </div>
+                    <div class="bg-slate-950 p-2 rounded-lg border border-white/5">
+                      <div class="text-[9px] text-slate-400">Queue</div>
+                      <div class="text-xs font-bold text-slate-100">{topicStats.queued}</div>
+                    </div>
+                    <div class="bg-slate-950 p-2 rounded-lg border border-white/5">
+                      <div class="text-[9px] text-emerald-400">Scraped</div>
+                      <div class="text-xs font-bold text-emerald-300">{topicStats.succeeded}</div>
+                    </div>
+                    <div class="bg-slate-950 p-2 rounded-lg border border-white/5">
+                      <div class="text-[9px] text-yellow-400">Skipped</div>
+                      <div class="text-xs font-bold text-yellow-300">{topicStats.skippedExisting || 0}</div>
+                    </div>
+                  </div>
+
+                  {/* Real-time pages stream */}
+                  {topicPages.length > 0 && (
+                    <div class="space-y-1">
+                      <div class="text-[10px] text-slate-400 font-semibold">Latest Scraped Articles:</div>
+                      <div class="max-h-24 overflow-y-auto custom-scrollbar space-y-1">
+                        {topicPages.map((pg, i) => (
+                          <div key={i} class="p-1.5 bg-slate-950 rounded border border-white/5 flex justify-between items-center text-[9px]">
+                            <span class="font-mono text-emerald-400 truncate max-w-[200px]" title={pg.filename}>{pg.filename}</span>
+                            <span class="text-slate-500 shrink-0">{pg.time}</span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Terminal log output */}
+                  <div class="h-28 overflow-y-auto custom-scrollbar bg-slate-950 border border-white/5 p-2 rounded-lg text-[9px] font-mono text-slate-400 space-y-1">
+                    {topicLogs.slice().reverse().map((log, idx) => (
+                      <div key={idx} class="truncate" title={log}>{log}</div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
           {consoleMode === 'batch' && (
             <div class="space-y-4 animate-fade-in">
               <div class="space-y-2">
