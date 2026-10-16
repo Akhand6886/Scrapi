@@ -213,13 +213,14 @@ export class Response {
   }
 
   /**
-   * Extracts metadata (title, description, pubDate, og tags, json-ld).
+   * Extracts comprehensive metadata (title, description, pubDate, author, category, tags, canonical URL, json-ld).
    */
   extractMetadata() {
     const $ = this.$;
     const title = $('title').text().trim() ||
       $('meta[property="og:title"]').attr('content') ||
       $('meta[name="twitter:title"]').attr('content') ||
+      $('h1').first().text().trim() ||
       '';
 
     const description = $('meta[name="description"]').attr('content') ||
@@ -227,23 +228,142 @@ export class Response {
       $('meta[name="twitter:description"]').attr('content') ||
       '';
 
-    const date = $('meta[property="article:published_time"]').attr('content') ||
+    // 1. JSON-LD Extraction
+    let jsonLdDate = null;
+    let jsonLdAuthor = null;
+    let jsonLdCategory = null;
+    let jsonLdTags = [];
+
+    const jsonLdScripts = (this.fullDom || $)('script[type="application/ld+json"]');
+    jsonLdScripts.each((_, el) => {
+      try {
+        const text = $(el).html() || '';
+        if (!text.trim()) return;
+        const parsed = JSON.parse(text);
+        const items = Array.isArray(parsed) ? parsed : (parsed['@graph'] && Array.isArray(parsed['@graph'])) ? parsed['@graph'] : [parsed];
+        for (const item of items) {
+          if (!item) continue;
+          if (!jsonLdDate && (item.datePublished || item.dateCreated || item.dateModified)) {
+            jsonLdDate = item.datePublished || item.dateCreated || item.dateModified;
+          }
+          if (!jsonLdAuthor && item.author) {
+            if (typeof item.author === 'string') jsonLdAuthor = item.author;
+            else if (Array.isArray(item.author) && item.author[0]) {
+              jsonLdAuthor = typeof item.author[0] === 'string' ? item.author[0] : item.author[0].name;
+            } else if (item.author.name) {
+              jsonLdAuthor = item.author.name;
+            }
+          }
+          if (!jsonLdCategory && (item.articleSection || item.about)) {
+            jsonLdCategory = item.articleSection || (typeof item.about === 'string' ? item.about : item.about?.name);
+          }
+          if (item.keywords) {
+            const kw = Array.isArray(item.keywords) ? item.keywords : String(item.keywords).split(/[,;]/);
+            jsonLdTags.push(...kw.map(k => k.trim()).filter(Boolean));
+          }
+        }
+      } catch (err) {}
+    });
+
+    // 2. Publication Date Extraction
+    let rawDate = jsonLdDate ||
+      $('meta[property="article:published_time"]').attr('content') ||
+      $('meta[property="og:article:published_time"]').attr('content') ||
       $('meta[name="date"]').attr('content') ||
       $('meta[name="pubdate"]').attr('content') ||
-      $('meta[property="og:article:published_time"]').attr('content') ||
+      $('meta[name="publishdate"]').attr('content') ||
+      $('meta[name="DC.date"]').attr('content') ||
+      $('meta[name="DC.date.issued"]').attr('content') ||
+      $('meta[name="sailthru.date"]').attr('content') ||
+      $('meta[name="parsely-pub-date"]').attr('content') ||
+      $('time[datetime]').attr('datetime') ||
+      $('[itemprop="datePublished"]').attr('datetime') ||
+      $('[itemprop="datePublished"]').attr('content') ||
+      $('[itemprop="datePublished"]').text().trim() ||
+      $('.published').first().text().trim() ||
+      $('.post-date').first().text().trim() ||
       null;
 
-    const author = $('meta[name="author"]').attr('content') ||
+    // URL date slug fallback (e.g. /2024/03/15/slug or /2024-03-15-slug)
+    let dateStr = null;
+    if (rawDate) {
+      try {
+        const parsedDate = new Date(rawDate);
+        if (!isNaN(parsedDate.getTime()) && parsedDate.getFullYear() >= 1990 && parsedDate.getFullYear() <= 2099) {
+          dateStr = parsedDate.toISOString().split('T')[0];
+        } else {
+          const match = String(rawDate).match(/\b(19\d\d|20\d\d)[/-](0[1-9]|1[0-2])([/-](0[1-9]|[12]\d|3[01]))?\b/);
+          if (match) {
+            dateStr = `${match[1]}-${match[2]}-${match[3] || '01'}`;
+          }
+        }
+      } catch (e) {}
+    }
+
+    if (!dateStr && this.url) {
+      const urlDateMatch = this.url.match(/\b(19\d\d|20\d\d)[/-](0[1-9]|1[0-2])([/-](0[1-9]|[12]\d|3[01]))?\b/);
+      if (urlDateMatch) {
+        dateStr = `${urlDateMatch[1]}-${urlDateMatch[2]}-${urlDateMatch[3] || '01'}`;
+        rawDate = rawDate || dateStr;
+      }
+    }
+
+    // 3. Author Extraction
+    const author = jsonLdAuthor ||
+      $('meta[name="author"]').attr('content') ||
+      $('meta[property="article:author"]').attr('content') ||
+      $('meta[name="twitter:creator"]').attr('content') ||
       $('[rel="author"]').first().text().trim() ||
+      $('[itemprop="author"]').first().text().trim() ||
+      $('.author-name').first().text().trim() ||
+      $('.byline').first().text().trim() ||
       null;
+
+    // 4. Category Extraction
+    let category = jsonLdCategory ||
+      $('meta[property="article:section"]').attr('content') ||
+      $('meta[name="section"]').attr('content') ||
+      $('meta[property="og:section"]').attr('content') ||
+      $('.breadcrumb a, [itemprop="breadcrumb"] a').last().text().trim() ||
+      null;
+    if (Array.isArray(category)) category = category[0];
+
+    // 5. Tags Extraction
+    const tagsSet = new Set(jsonLdTags);
+    $('meta[property="article:tag"]').each((_, el) => {
+      const c = $(el).attr('content');
+      if (c && c.trim()) tagsSet.add(c.trim());
+    });
+    const keywordsMeta = $('meta[name="keywords"]').attr('content');
+    if (keywordsMeta) {
+      keywordsMeta.split(/[,;]/).forEach(k => {
+        if (k.trim()) tagsSet.add(k.trim());
+      });
+    }
+    $('a[rel="tag"], .tags a, .post-tags a').each((_, el) => {
+      const t = $(el).text().trim();
+      if (t && t.length < 50) tagsSet.add(t);
+    });
+
+    // 6. Canonical URL
+    let canonicalUrl = $('link[rel="canonical"]').attr('href') || null;
+    if (canonicalUrl && this.url) {
+      try {
+        canonicalUrl = new URL(canonicalUrl, this.url).href;
+      } catch (e) {}
+    }
 
     return {
       title,
       url: this.url,
+      canonical_url: canonicalUrl || this.url,
       scraped_at: new Date().toISOString(),
       description,
-      date: date ? date.split('T')[0] : null,
-      author,
+      date: dateStr,
+      raw_date: rawDate,
+      author: author ? String(author).trim() : null,
+      category: category ? String(category).trim() : null,
+      tags: Array.from(tagsSet),
       fetcher: this.fetcher
     };
   }
