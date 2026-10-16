@@ -12,6 +12,67 @@ export const NOISE_SELECTORS = [
   '[aria-hidden="true"]', '#cookie-consent', '.social-share'
 ];
 
+export const DATE_REGEX = /\b(19\d\d|20\d\d)[/-](0[1-9]|1[0-2])(?:[/-](0[1-9]|[12]\d|3[01]))?\b/;
+
+const DATE_META_SELECTORS = [
+  'meta[property="article:published_time"]',
+  'meta[property="og:article:published_time"]',
+  'meta[name="date"]',
+  'meta[name="pubdate"]',
+  'meta[name="publishdate"]',
+  'meta[name="DC.date"]',
+  'meta[name="DC.date.issued"]',
+  'meta[name="sailthru.date"]',
+  'meta[name="parsely-pub-date"]'
+];
+
+const AUTHOR_META_SELECTORS = [
+  'meta[name="author"]',
+  'meta[property="article:author"]',
+  'meta[name="twitter:creator"]'
+];
+
+const CATEGORY_META_SELECTORS = [
+  'meta[property="article:section"]',
+  'meta[name="section"]',
+  'meta[property="og:section"]'
+];
+
+/**
+ * Normalizes raw date strings, ISO timestamps, or URL date slugs to YYYY-MM-DD format.
+ * @param {string} rawDate 
+ * @param {string} [url] 
+ * @returns {{ dateStr: string|null, rawDate: string|null }}
+ */
+export function normalizeDate(rawDate, url = '') {
+  let dateStr = null;
+  let normalizedRaw = rawDate || null;
+
+  if (rawDate) {
+    try {
+      const parsed = new Date(rawDate);
+      if (!isNaN(parsed.getTime()) && parsed.getFullYear() >= 1990 && parsed.getFullYear() <= 2099) {
+        dateStr = parsed.toISOString().split('T')[0];
+      } else {
+        const match = String(rawDate).match(DATE_REGEX);
+        if (match) {
+          dateStr = `${match[1]}-${match[2]}-${match[3] || '01'}`;
+        }
+      }
+    } catch {}
+  }
+
+  if (!dateStr && url) {
+    const urlMatch = url.match(DATE_REGEX);
+    if (urlMatch) {
+      dateStr = `${urlMatch[1]}-${urlMatch[2]}-${urlMatch[3] || '01'}`;
+      normalizedRaw = normalizedRaw || dateStr;
+    }
+  }
+
+  return { dateStr, rawDate: normalizedRaw };
+}
+
 /**
  * Response / Adaptor represents a scraped web page response with unified parsing tools.
  */
@@ -266,66 +327,66 @@ export class Response {
     });
 
     // 2. Publication Date Extraction
-    let rawDate = jsonLdDate ||
-      $('meta[property="article:published_time"]').attr('content') ||
-      $('meta[property="og:article:published_time"]').attr('content') ||
-      $('meta[name="date"]').attr('content') ||
-      $('meta[name="pubdate"]').attr('content') ||
-      $('meta[name="publishdate"]').attr('content') ||
-      $('meta[name="DC.date"]').attr('content') ||
-      $('meta[name="DC.date.issued"]').attr('content') ||
-      $('meta[name="sailthru.date"]').attr('content') ||
-      $('meta[name="parsely-pub-date"]').attr('content') ||
-      $('time[datetime]').attr('datetime') ||
-      $('[itemprop="datePublished"]').attr('datetime') ||
-      $('[itemprop="datePublished"]').attr('content') ||
-      $('[itemprop="datePublished"]').text().trim() ||
-      $('.published').first().text().trim() ||
-      $('.post-date').first().text().trim() ||
-      null;
-
-    // URL date slug fallback (e.g. /2024/03/15/slug or /2024-03-15-slug)
-    let dateStr = null;
-    if (rawDate) {
-      try {
-        const parsedDate = new Date(rawDate);
-        if (!isNaN(parsedDate.getTime()) && parsedDate.getFullYear() >= 1990 && parsedDate.getFullYear() <= 2099) {
-          dateStr = parsedDate.toISOString().split('T')[0];
-        } else {
-          const match = String(rawDate).match(/\b(19\d\d|20\d\d)[/-](0[1-9]|1[0-2])(?:[/-](0[1-9]|[12]\d|3[01]))?\b/);
-          if (match) {
-            dateStr = `${match[1]}-${match[2]}-${match[3] || '01'}`;
-          }
+    let rawDate = jsonLdDate;
+    if (!rawDate) {
+      for (const sel of DATE_META_SELECTORS) {
+        const val = $(sel).attr('content');
+        if (val && val.trim()) {
+          rawDate = val.trim();
+          break;
         }
-      } catch (e) {}
-    }
-
-    if (!dateStr && this.url) {
-      const urlDateMatch = this.url.match(/\b(19\d\d|20\d\d)[/-](0[1-9]|1[0-2])(?:[/-](0[1-9]|[12]\d|3[01]))?\b/);
-      if (urlDateMatch) {
-        dateStr = `${urlDateMatch[1]}-${urlDateMatch[2]}-${urlDateMatch[3] || '01'}`;
-        rawDate = rawDate || dateStr;
       }
     }
+    if (!rawDate) {
+      const timeVal = $('time[datetime]').first().attr('datetime');
+      if (timeVal && timeVal.trim()) {
+        rawDate = timeVal.trim();
+      }
+    }
+    if (!rawDate) {
+      const itemProp = $('[itemprop="datePublished"]').first();
+      if (itemProp.length) {
+        rawDate = itemProp.attr('datetime') || itemProp.attr('content') || itemProp.text().trim() || null;
+      }
+    }
+    if (!rawDate) {
+      const classDate = $('.published, .post-date').first().text().trim();
+      if (classDate) rawDate = classDate;
+    }
+
+    const { dateStr, rawDate: finalRawDate } = normalizeDate(rawDate, this.url);
 
     // 3. Author Extraction
-    const author = jsonLdAuthor ||
-      $('meta[name="author"]').attr('content') ||
-      $('meta[property="article:author"]').attr('content') ||
-      $('meta[name="twitter:creator"]').attr('content') ||
-      $('[rel="author"]').first().text().trim() ||
-      $('[itemprop="author"]').first().text().trim() ||
-      $('.author-name').first().text().trim() ||
-      $('.byline').first().text().trim() ||
-      null;
+    let author = jsonLdAuthor;
+    if (!author) {
+      for (const sel of AUTHOR_META_SELECTORS) {
+        const val = $(sel).attr('content');
+        if (val && val.trim()) {
+          author = val.trim();
+          break;
+        }
+      }
+    }
+    if (!author) {
+      const authorText = $('[rel="author"], [itemprop="author"], .author-name, .byline').first().text().trim();
+      if (authorText) author = authorText;
+    }
 
     // 4. Category Extraction
-    let category = jsonLdCategory ||
-      $('meta[property="article:section"]').attr('content') ||
-      $('meta[name="section"]').attr('content') ||
-      $('meta[property="og:section"]').attr('content') ||
-      $('.breadcrumb a, [itemprop="breadcrumb"] a').last().text().trim() ||
-      null;
+    let category = jsonLdCategory;
+    if (!category) {
+      for (const sel of CATEGORY_META_SELECTORS) {
+        const val = $(sel).attr('content');
+        if (val && val.trim()) {
+          category = val.trim();
+          break;
+        }
+      }
+    }
+    if (!category) {
+      const breadcrumb = $('.breadcrumb a, [itemprop="breadcrumb"] a').last().text().trim();
+      if (breadcrumb) category = breadcrumb;
+    }
     if (Array.isArray(category)) category = category[0];
 
     // 5. Tags Extraction
@@ -360,7 +421,7 @@ export class Response {
       scraped_at: new Date().toISOString(),
       description,
       date: dateStr,
-      raw_date: rawDate,
+      raw_date: finalRawDate || rawDate,
       author: author ? String(author).trim() : null,
       category: category ? String(category).trim() : null,
       tags: Array.from(tagsSet),
