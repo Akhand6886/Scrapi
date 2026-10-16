@@ -49,10 +49,14 @@ export class MarkdownEngine {
     const lines = ['---'];
     if (metadata.title) lines.push(`title: "${String(metadata.title).replace(/"/g, '\\"')}"`);
     if (metadata.url) lines.push(`url: "${metadata.url}"`);
+    if (metadata.canonical_url && metadata.canonical_url !== metadata.url) lines.push(`canonical_url: "${metadata.canonical_url}"`);
     if (metadata.scraped_at) lines.push(`scraped_at: "${metadata.scraped_at}"`);
+    if (metadata.date) lines.push(`date: "${metadata.date}"`);
+    if (metadata.author) lines.push(`author: "${String(metadata.author).replace(/"/g, '\\"')}"`);
+    if (metadata.category) lines.push(`category: "${metadata.category}"`);
+    if (metadata.tags && metadata.tags.length > 0) lines.push(`tags: [${metadata.tags.map(t => `"${String(t).replace(/"/g, '\\"')}"`).join(', ')}]`);
     if (metadata.description) lines.push(`description: "${String(metadata.description).replace(/"/g, '\\"')}"`);
     if (metadata.word_count !== undefined) lines.push(`word_count: ${metadata.word_count}`);
-    if (metadata.category) lines.push(`category: "${metadata.category}"`);
     if (metadata.fetcher) lines.push(`fetcher: "${metadata.fetcher}"`);
     lines.push('---');
     return lines.join('\n');
