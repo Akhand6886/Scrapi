@@ -88,6 +88,7 @@ export async function initStorage(dbDir = './data', outputDir = './output') {
 
     CREATE INDEX IF NOT EXISTS idx_scrapes_category ON scrapes(category);
     CREATE INDEX IF NOT EXISTS idx_scrapes_scraped_at ON scrapes(scraped_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_scrapes_url ON scrapes(url);
     CREATE INDEX IF NOT EXISTS idx_fingerprints_domain ON element_fingerprints(domain);
   `);
 
@@ -137,12 +138,24 @@ export async function saveMarkdownFile(markdown, metadata, options = {}) {
     fileContent += '---\n';
     fileContent += `title: "${(metadata.title || '').replace(/"/g, '\\"')}"\n`;
     fileContent += `url: "${metadata.url}"\n`;
-    fileContent += `scraped_at: "${metadata.scraped_at}"\n`;
-    if (metadata.description) {
-      fileContent += `description: "${metadata.description.replace(/"/g, '\\"')}"\n`;
+    if (metadata.canonical_url && metadata.canonical_url !== metadata.url) {
+      fileContent += `canonical_url: "${metadata.canonical_url}"\n`;
     }
+    fileContent += `scraped_at: "${metadata.scraped_at}"\n`;
     if (metadata.date) {
       fileContent += `date: "${metadata.date}"\n`;
+    }
+    if (metadata.author) {
+      fileContent += `author: "${(metadata.author || '').replace(/"/g, '\\"')}"\n`;
+    }
+    if (metadata.category || options.category) {
+      fileContent += `category: "${metadata.category || options.category}"\n`;
+    }
+    if (metadata.tags && metadata.tags.length > 0) {
+      fileContent += `tags: [${metadata.tags.map(t => `"${String(t).replace(/"/g, '\\"')}"`).join(', ')}]\n`;
+    }
+    if (metadata.description) {
+      fileContent += `description: "${metadata.description.replace(/"/g, '\\"')}"\n`;
     }
     fileContent += '---\n\n';
   }
@@ -259,6 +272,32 @@ export function getScrapeById(id) {
     SELECT * FROM scrapes WHERE id = ?
   `);
   return stmt.get(id);
+}
+
+/**
+ * Retrieves a scrape by its URL.
+ * @param {string} url 
+ * @returns {object|null}
+ */
+export function getScrapeByUrl(url) {
+  if (!db) return null;
+  const stmt = db.prepare(`
+    SELECT * FROM scrapes WHERE url = ? ORDER BY id DESC LIMIT 1
+  `);
+  return stmt.get(url) || null;
+}
+
+/**
+ * Checks if a URL has already been successfully scraped.
+ * @param {string} url 
+ * @returns {boolean}
+ */
+export function isUrlScraped(url) {
+  if (!db) return false;
+  const stmt = db.prepare(`
+    SELECT 1 FROM scrapes WHERE url = ? AND status = 'success' LIMIT 1
+  `);
+  return !!stmt.get(url);
 }
 
 /**
