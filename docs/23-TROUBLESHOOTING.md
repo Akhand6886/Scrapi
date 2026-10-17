@@ -48,7 +48,7 @@ When encountering an unexpected failure, run this quick sequence:
   browserType.launch: Executable doesn't exist at /Users/alpha/Library/Caches/ms-playwright/chromium-1155/chrome-mac/Chromium.app
   ```
 * **Root Cause**: Playwright was installed via `npm install`, but the headless Chromium browser binaries have not been downloaded.
-* **Relevant File**: [`src/fetcher/dynamic.js`](../src/fetcher/dynamic.js), [`src/fetcher/stealthy.js`](../src/fetcher/stealthy.js)
+* **Relevant File**: [`src/fetchers/dynamic.js`](../src/fetchers/dynamic.js), [`src/fetchers/stealth.js`](../src/fetchers/stealth.js)
 * **Resolution**:
   Run the Playwright CLI to download the required browser binaries:
   ```bash
@@ -83,7 +83,7 @@ When encountering an unexpected failure, run this quick sequence:
   ```
   The HTML body contains phrases like *"Just a moment..."*, *"Checking your browser"*, or *"Cloudflare"*.
 * **Root Cause**: The target website's Web Application Firewall (WAF) detected standard HTTP client headers (Axios/curl) and challenged the request.
-* **Relevant Files**: [`src/fetcher/stealthy.js`](../src/fetcher/stealthy.js), [`src/fetcher/pool.js`](../src/fetcher/pool.js)
+* **Relevant Files**: [`src/fetchers/stealth.js`](../src/fetchers/stealth.js), [`src/fetchers/index.js`](../src/fetchers/index.js)
 * **Resolution**:
   1. Switch to the **stealth** fetcher tier, which launches Chromium with randomized fingerprints, spoofed navigator properties, and realistic viewport sizes:
      ```bash
@@ -99,7 +99,7 @@ When encountering an unexpected failure, run this quick sequence:
 ### 2.5 HTTP 429 Too Many Requests (Rate Limiting)
 * **Symptom**: Requests initially succeed, but subsequent requests fail with `HTTP 429` or connection timeouts.
 * **Root Cause**: High concurrency or zero delay triggered origin rate-limiting rules.
-* **Relevant Files**: [`src/spider/topicCrawler.js`](../src/spider/topicCrawler.js), [`src/spider/spider.js`](../src/spider/spider.js)
+* **Relevant Files**: [`src/spiders/topic_crawler.js`](../src/spiders/topic_crawler.js), [`src/spiders/engine.js`](../src/spiders/engine.js)
 * **Resolution**:
   1. Reduce concurrency:
      ```bash
@@ -141,13 +141,13 @@ When encountering an unexpected failure, run this quick sequence:
   1. **Infinite Scroll / Dynamic AJAX Pagination**: The site loads older pages via AJAX instead of standard `<a>` tags with `href` links.
   2. **Strict Date Filter**: The `--since` date filter rejected pages lacking explicit ISO timestamp metadata.
   3. **Unmatched Topic Terms**: Articles do not contain the exact topic slug in their URL path or anchor text.
-* **Relevant Files**: [`src/spider/topicCrawler.js`](../src/spider/topicCrawler.js), [`src/spider/paginationEngine.js`](../src/spider/paginationEngine.js), [`src/spider/topicMatcher.js`](../src/spider/topicMatcher.js)
+* **Relevant Files**: [`src/spiders/topic_crawler.js`](../src/spiders/topic_crawler.js), [`src/spiders/pagination.js`](../src/spiders/pagination.js), [`src/spiders/topic_matcher.js`](../src/spiders/topic_matcher.js)
 * **Resolution**:
   1. Check if the site provides an XML sitemap:
      ```bash
      node src/cli.js sitemap https://target.com
      ```
-  2. Inspect pagination patterns in [`src/spider/paginationEngine.js`](../src/spider/paginationEngine.js) to confirm page query parameter compatibility.
+  2. Inspect pagination patterns in [`src/spiders/pagination.js`](../src/spiders/pagination.js) to confirm page query parameter compatibility.
   3. Provide broader topic keywords:
      ```bash
      node src/cli.js topic-crawl https://target.com --topic "tech,ai,software"
@@ -157,27 +157,27 @@ When encountering an unexpected failure, run this quick sequence:
 
 ### 2.8 `SqliteError: database is locked` (SQLITE_BUSY)
 * **Symptom**: Database write operations throw `SqliteError: database is locked`.
-* **Root Cause**: Multiple simultaneous CLI commands or processes are attempting uncoordinated writes to `scrapi.db` without WAL mode enabled, or an external SQLite browser holds an open write transaction.
-* **Relevant File**: [`src/db/sqliteStorage.js`](../src/db/sqliteStorage.js)
+* **Root Cause**: Multiple simultaneous CLI commands or processes are attempting uncoordinated writes to `scrapes.db` without WAL mode enabled, or an external SQLite browser holds an open write transaction.
+* **Relevant File**: [`src/storage.js`](../src/storage.js)
 * **Resolution**:
   1. Verify Write-Ahead Logging (WAL) is enabled:
      ```bash
-     sqlite3 scrapi.db "PRAGMA journal_mode;"
+     sqlite3 data/scrapes.db "PRAGMA journal_mode;"
      # Output should be: wal
      ```
   2. Close any external SQLite desktop GUI applications (e.g., DB Browser for SQLite) that may be locking the file.
-  3. In [`src/db/sqliteStorage.js`](../src/db/sqliteStorage.js), verify that `db.pragma('busy_timeout = 5000');` is configured.
+  3. In [`src/storage.js`](../src/storage.js), verify that `db.pragma('busy_timeout = 5000');` is configured (default in Scrapi v2.0).
 
 ---
 
 ### 2.9 High Memory Consumption During Deep Crawls
 * **Symptom**: Node.js memory usage climbs significantly during continuous crawls of $>10,000$ pages.
 * **Root Cause**: In-memory storage of visited URL Sets or SQLite WAL file accumulating uncheckpointed pages.
-* **Relevant Files**: [`src/spider/topicCrawler.js`](../src/spider/topicCrawler.js), [`src/db/sqliteStorage.js`](../src/db/sqliteStorage.js)
+* **Relevant Files**: [`src/spiders/topic_crawler.js`](../src/spiders/topic_crawler.js), [`src/storage.js`](../src/storage.js)
 * **Resolution**:
   1. Force an SQLite WAL checkpoint to disk:
      ```bash
-     sqlite3 scrapi.db "PRAGMA wal_checkpoint(TRUNCATE);"
+     sqlite3 data/scrapes.db "PRAGMA wal_checkpoint(TRUNCATE);"
      ```
   2. Segment very large crawls by topic or subcategory rather than running unconstrained whole-domain sweeps.
   3. Increase Node.js heap ceiling if performing massive concurrent batch jobs:

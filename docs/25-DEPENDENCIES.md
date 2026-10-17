@@ -10,20 +10,20 @@ The following packages are installed under `dependencies` in [`package.json`](..
 
 | Package | Version | Primary Purpose | Consuming Modules |
 |---|---|---|---|
-| [`axios`](https://www.npmjs.com/package/axios) | `^1.7.2` | High-performance HTTP client with Keep-Alive connection pooling. | [`src/fetcher/static.js`](../src/fetcher/static.js), [`src/spider/sitemapEngine.js`](../src/spider/sitemapEngine.js) |
-| [`better-sqlite3`](https://www.npmjs.com/package/better-sqlite3) | `^11.0.0` | Ultra-fast, synchronous SQLite database driver in WAL mode. | [`src/db/sqliteStorage.js`](../src/db/sqliteStorage.js), [`src/spider/spider.js`](../src/spider/spider.js) |
-| [`playwright`](https://www.npmjs.com/package/playwright) | `^1.60.0` | Headless Chromium automation and anti-bot stealth emulation. | [`src/fetcher/dynamic.js`](../src/fetcher/dynamic.js), [`src/fetcher/stealthy.js`](../src/fetcher/stealthy.js) |
-| [`cheerio`](https://www.npmjs.com/package/cheerio) | `^1.0.0-rc.12` | Fast, lightweight HTML/XML parser and jQuery-like query engine. | [`src/parser/response.js`](../src/parser/response.js), [`src/parser/adaptor.js`](../src/parser/adaptor.js), [`src/scraper.js`](../src/scraper.js) |
-| [`commander`](https://www.npmjs.com/package/commander) | `^12.1.0` | Command-line interface framework for options, subcommands, and help. | [`bin/scrapi.js`](../bin/scrapi.js), [`src/cli.js`](../src/cli.js) |
-| [`express`](https://www.npmjs.com/package/express) | `^5.2.1` | Minimal web server for the Web Dashboard and iframe picker proxy. | [`src/dashboard/server.js`](../src/dashboard/server.js) |
+| [`axios`](https://www.npmjs.com/package/axios) | `^1.7.2` | High-performance HTTP client with Keep-Alive connection pooling. | [`src/fetchers/static.js`](../src/fetchers/static.js), [`src/spiders/sitemap.js`](../src/spiders/sitemap.js) |
+| [`better-sqlite3`](https://www.npmjs.com/package/better-sqlite3) | `^11.0.0` | Ultra-fast, synchronous SQLite database driver in WAL mode. | [`src/storage.js`](../src/storage.js), [`src/spiders/engine.js`](../src/spiders/engine.js) |
+| [`playwright`](https://www.npmjs.com/package/playwright) | `^1.60.0` | Headless Chromium automation and anti-bot stealth emulation. | [`src/fetchers/dynamic.js`](../src/fetchers/dynamic.js), [`src/fetchers/stealth.js`](../src/fetchers/stealth.js) |
+| [`cheerio`](https://www.npmjs.com/package/cheerio) | `^1.0.0-rc.12` | Fast, lightweight HTML/XML parser and jQuery-like query engine. | [`src/parser/adaptor.js`](../src/parser/adaptor.js), [`src/parser/selector.js`](../src/parser/selector.js), [`src/scraper.js`](../src/scraper.js) |
+| [`commander`](https://www.npmjs.com/package/commander) | `^12.1.0` | Command-line interface framework for options, subcommands, and help. | [`src/cli.js`](../src/cli.js) |
+| [`express`](https://www.npmjs.com/package/express) | `^5.2.1` | Minimal web server for the Web Dashboard and iframe picker proxy. | [`src/ui/server.js`](../src/ui/server.js) |
 | [`turndown`](https://www.npmjs.com/package/turndown) | `^7.2.0` | HTML-to-Markdown conversion engine. | [`src/parser/markdown.js`](../src/parser/markdown.js), [`src/scraper.js`](../src/scraper.js) |
 | [`turndown-plugin-gfm`](https://www.npmjs.com/package/turndown-plugin-gfm) | `^1.0.2` | GitHub-Flavored Markdown plugin (tables, checklists, strikethrough). | [`src/parser/markdown.js`](../src/parser/markdown.js) |
-| [`zod`](https://www.npmjs.com/package/zod) | `^4.4.3` | Schema declaration and runtime validation for MCP tools and profiles. | [`src/mcp/server.js`](../src/mcp/server.js), [`src/parser/adaptor.js`](../src/parser/adaptor.js) |
-| [`dotenv`](https://www.npmjs.com/package/dotenv) | `^16.4.5` | Zero-dependency environment variable loader from `.env`. | [`src/cli.js`](../src/cli.js), [`src/dashboard/server.js`](../src/dashboard/server.js) |
-| [`cors`](https://www.npmjs.com/package/cors) | `^2.8.6` | Cross-Origin Resource Sharing middleware for Express API routes. | [`src/dashboard/server.js`](../src/dashboard/server.js) |
-| [`chalk`](https://www.npmjs.com/package/chalk) | `^5.3.0` | Terminal string styling and color formatting. | [`bin/scrapi.js`](../bin/scrapi.js), [`src/cli.js`](../src/cli.js) |
+| [`zod`](https://www.npmjs.com/package/zod) | `^4.4.3` | Schema declaration and runtime validation for MCP tools and profiles. | [`src/mcp/server.js`](../src/mcp/server.js), [`src/llm.js`](../src/llm.js) |
+| [`dotenv`](https://www.npmjs.com/package/dotenv) | `^16.4.5` | Zero-dependency environment variable loader from `.env`. | [`src/cli.js`](../src/cli.js), [`src/ui/server.js`](../src/ui/server.js) |
+| [`cors`](https://www.npmjs.com/package/cors) | `^2.8.6` | Cross-Origin Resource Sharing middleware for Express API routes. | [`src/ui/server.js`](../src/ui/server.js) |
+| [`chalk`](https://www.npmjs.com/package/chalk) | `^5.3.0` | Terminal string styling and color formatting. | [`src/cli.js`](../src/cli.js) |
 | [`ora`](https://www.npmjs.com/package/ora) | `^8.0.1` | Elegant terminal spinner animations for CLI tasks. | [`src/cli.js`](../src/cli.js) |
-| [`@anthropic-ai/sdk`](https://www.npmjs.com/package/@anthropic-ai/sdk) | `^0.104.1` | Official Claude SDK for LLM-assisted selector and content extraction. | [`src/adaptive/llmFallback.js`](../src/adaptive/llmFallback.js) (optional) |
+| [`@anthropic-ai/sdk`](https://www.npmjs.com/package/@anthropic-ai/sdk) | `^0.104.1` | Official Claude SDK for LLM-assisted selector and content extraction. | [`src/llm.js`](../src/llm.js) (optional) |
 
 ---
 

@@ -73,10 +73,17 @@ export class PaginationEngine {
     for (const sel of NEXT_PAGE_SELECTORS) {
       const el = $(sel);
       if (el.length > 0) {
-        const href = el.attr('href');
-        const resolved = this.cleanUrl(href, baseUrl);
-        if (resolved && resolved !== baseUrl) {
-          return resolved;
+        let foundUrl = null;
+        el.each((_, node) => {
+          if (foundUrl) return;
+          const href = $(node).attr('href');
+          const resolved = this.cleanUrl(href, baseUrl);
+          if (resolved && resolved !== baseUrl) {
+            foundUrl = resolved;
+          }
+        });
+        if (foundUrl) {
+          return foundUrl;
         }
       }
     }

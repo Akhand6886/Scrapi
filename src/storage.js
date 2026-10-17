@@ -4,21 +4,90 @@ import Database from 'better-sqlite3';
 import zlib from 'zlib';
 import axios from 'axios';
 
-let db;
+let db = null;
 
 /**
- * Initializes the SQLite database and output directories.
+ * Checks if storage database is initialized and ready.
+ * @returns {boolean}
+ */
+export function isStorageReady() {
+  return db !== null;
+}
+
+/**
+ * Returns the active SQLite database instance.
+ * @returns {Database|null}
+ */
+export function getDatabase() {
+  return db;
+}
+
+/**
+ * Closes active database connection and flushes WAL journals.
+ */
+export function closeStorage() {
+  if (db) {
+    try {
+      db.pragma('wal_checkpoint(TRUNCATE)');
+      db.close();
+    } catch (e) {
+      // Ignore closing errors during shutdown
+    }
+    db = null;
+  }
+}
+
+/**
+ * Initializes the SQLite database and output directories with auto-recovery on corruption.
  * @param {string} dbDir 
  * @param {string} outputDir 
  */
 export async function initStorage(dbDir = './data', outputDir = './output') {
+  // If a DB is already open, cleanly close it first
+  closeStorage();
+
   // Ensure directories exist
   await fs.mkdir(dbDir, { recursive: true });
   await fs.mkdir(outputDir, { recursive: true });
 
   const dbPath = path.join(dbDir, 'scrapes.db');
-  db = new Database(dbPath);
-  db.pragma('journal_mode = WAL');
+
+  const openAndVerifyDatabase = () => {
+    const instance = new Database(dbPath);
+    instance.pragma('journal_mode = WAL');
+    instance.pragma('busy_timeout = 5000');
+    instance.pragma('synchronous = NORMAL');
+
+    // Run quick integrity check
+    const check = instance.pragma('quick_check');
+    if (!check || check.length === 0 || check[0].quick_check !== 'ok') {
+      instance.close();
+      throw new Error(`SQLite corruption detected by quick_check: ${JSON.stringify(check)}`);
+    }
+    return instance;
+  };
+
+  try {
+    db = openAndVerifyDatabase();
+  } catch (err) {
+    console.warn(`[SQLite Recovery] Database at ${dbPath} could not be opened safely (${err.message}). Auto-recovering...`);
+    try {
+      const backupStamp = Date.now();
+      const corruptBackupPath = `${dbPath}.corrupt.${backupStamp}`;
+      await fs.rename(dbPath, corruptBackupPath).catch(() => {});
+      await fs.rename(`${dbPath}-wal`, `${corruptBackupPath}-wal`).catch(() => {});
+      await fs.rename(`${dbPath}-shm`, `${corruptBackupPath}-shm`).catch(() => {});
+      console.warn(`[SQLite Recovery] Corrupted database backed up to ${corruptBackupPath}. Creating fresh database...`);
+      
+      db = new Database(dbPath);
+      db.pragma('journal_mode = WAL');
+      db.pragma('busy_timeout = 5000');
+      db.pragma('synchronous = NORMAL');
+    } catch (recErr) {
+      console.error(`[SQLite Recovery Fatal] Failed to recover database at ${dbPath}:`, recErr.message);
+      throw recErr;
+    }
+  }
 
   // Create tables
   db.exec(`
@@ -197,38 +266,44 @@ export async function saveJsonFile(jsonData, filename, options = {}) {
 /**
  * Inserts a scrape record.
  * @param {object} record 
- * @returns {number} Inserted ID
+ * @returns {number|null} Inserted ID
  */
 export function insertScrape(record) {
-  const stmt = db.prepare(`
-    INSERT INTO scrapes (
-      url, title, description, filename, word_count, 
-      scraped_at, selector, status, error, profile_id,
-      llm_processed, schema_used, category
-    ) VALUES (
-      ?, ?, ?, ?, ?, 
-      ?, ?, ?, ?, ?,
-      ?, ?, ?
-    )
-  `);
+  if (!db) return null;
+  try {
+    const stmt = db.prepare(`
+      INSERT INTO scrapes (
+        url, title, description, filename, word_count, 
+        scraped_at, selector, status, error, profile_id,
+        llm_processed, schema_used, category
+      ) VALUES (
+        ?, ?, ?, ?, ?, 
+        ?, ?, ?, ?, ?,
+        ?, ?, ?
+      )
+    `);
 
-  const info = stmt.run(
-    record.url,
-    record.title || null,
-    record.description || null,
-    record.filename || null,
-    record.word_count || 0,
-    record.scraped_at,
-    record.selector || null,
-    record.status,
-    record.error || null,
-    record.profile_id || null,
-    record.llm_processed ? 1 : 0,
-    record.schema_used || null,
-    record.category || null
-  );
+    const info = stmt.run(
+      record.url,
+      record.title || null,
+      record.description || null,
+      record.filename || null,
+      record.word_count || 0,
+      record.scraped_at,
+      record.selector || null,
+      record.status,
+      record.error || null,
+      record.profile_id || null,
+      record.llm_processed ? 1 : 0,
+      record.schema_used || null,
+      record.category || null
+    );
 
-  return info.lastInsertRowid;
+    return info.lastInsertRowid;
+  } catch (err) {
+    console.error(`[Storage Error] insertScrape failed for ${record?.url}:`, err.message);
+    return null;
+  }
 }
 
 /**
@@ -237,12 +312,17 @@ export function insertScrape(record) {
  * @param {string} schemaUsed 
  */
 export function markScrapeLlmProcessed(scrapeId, schemaUsed) {
-  const stmt = db.prepare(`
-    UPDATE scrapes 
-    SET llm_processed = 1, schema_used = ?
-    WHERE id = ?
-  `);
-  stmt.run(schemaUsed, scrapeId);
+  if (!db) return;
+  try {
+    const stmt = db.prepare(`
+      UPDATE scrapes 
+      SET llm_processed = 1, schema_used = ?
+      WHERE id = ?
+    `);
+    stmt.run(schemaUsed, scrapeId);
+  } catch (err) {
+    console.error(`[Storage Error] markScrapeLlmProcessed failed for ID ${scrapeId}:`, err.message);
+  }
 }
 
 /**
@@ -250,28 +330,39 @@ export function markScrapeLlmProcessed(scrapeId, schemaUsed) {
  * @returns {Array}
  */
 export function getAllScrapes(categoryFilter = null) {
-  if (categoryFilter) {
+  if (!db) return [];
+  try {
+    if (categoryFilter) {
+      const stmt = db.prepare(`
+        SELECT * FROM scrapes WHERE category = ? ORDER BY scraped_at DESC
+      `);
+      return stmt.all(categoryFilter);
+    }
     const stmt = db.prepare(`
-      SELECT * FROM scrapes WHERE category = ? ORDER BY scraped_at DESC
+      SELECT * FROM scrapes ORDER BY scraped_at DESC
     `);
-    return stmt.all(categoryFilter);
+    return stmt.all();
+  } catch (err) {
+    console.error('[Storage Error] getAllScrapes failed:', err.message);
+    return [];
   }
-  const stmt = db.prepare(`
-    SELECT * FROM scrapes ORDER BY scraped_at DESC
-  `);
-  return stmt.all();
 }
 
 /**
  * Retrieves a scrape by its ID.
  * @param {number} id 
- * @returns {object}
+ * @returns {object|null}
  */
 export function getScrapeById(id) {
-  const stmt = db.prepare(`
-    SELECT * FROM scrapes WHERE id = ?
-  `);
-  return stmt.get(id);
+  if (!db) return null;
+  try {
+    const stmt = db.prepare(`
+      SELECT * FROM scrapes WHERE id = ?
+    `);
+    return stmt.get(id) || null;
+  } catch (err) {
+    return null;
+  }
 }
 
 /**
@@ -281,10 +372,14 @@ export function getScrapeById(id) {
  */
 export function getScrapeByUrl(url) {
   if (!db) return null;
-  const stmt = db.prepare(`
-    SELECT * FROM scrapes WHERE url = ? ORDER BY id DESC LIMIT 1
-  `);
-  return stmt.get(url) || null;
+  try {
+    const stmt = db.prepare(`
+      SELECT * FROM scrapes WHERE url = ? ORDER BY id DESC LIMIT 1
+    `);
+    return stmt.get(url) || null;
+  } catch (err) {
+    return null;
+  }
 }
 
 /**
@@ -294,10 +389,14 @@ export function getScrapeByUrl(url) {
  */
 export function isUrlScraped(url) {
   if (!db) return false;
-  const stmt = db.prepare(`
-    SELECT 1 FROM scrapes WHERE url = ? AND status = 'success' LIMIT 1
-  `);
-  return !!stmt.get(url);
+  try {
+    const stmt = db.prepare(`
+      SELECT 1 FROM scrapes WHERE url = ? AND status = 'success' LIMIT 1
+    `);
+    return !!stmt.get(url);
+  } catch (err) {
+    return false;
+  }
 }
 
 /**
@@ -307,31 +406,45 @@ export function isUrlScraped(url) {
  * @param {object} selectors 
  */
 export function saveProfile(name, urlPattern, selectors) {
-  const stmt = db.prepare(`
-    INSERT INTO profiles (name, url_pattern, selectors, created_at)
-    VALUES (?, ?, ?, ?)
-    ON CONFLICT(name) DO UPDATE SET
-      url_pattern = excluded.url_pattern,
-      selectors = excluded.selectors,
-      created_at = excluded.created_at
-  `);
-  stmt.run(name, urlPattern, JSON.stringify(selectors), new Date().toISOString());
+  if (!db) return;
+  try {
+    const stmt = db.prepare(`
+      INSERT INTO profiles (name, url_pattern, selectors, created_at)
+      VALUES (?, ?, ?, ?)
+      ON CONFLICT(name) DO UPDATE SET
+        url_pattern = excluded.url_pattern,
+        selectors = excluded.selectors,
+        created_at = excluded.created_at
+    `);
+    stmt.run(name, urlPattern, JSON.stringify(selectors), new Date().toISOString());
+  } catch (err) {
+    console.error(`[Storage Error] saveProfile failed for ${name}:`, err.message);
+  }
 }
 
 /**
  * Gets a profile by name.
  * @param {string} name 
- * @returns {object}
+ * @returns {object|null}
  */
 export function getProfileByName(name) {
-  const stmt = db.prepare(`
-    SELECT * FROM profiles WHERE name = ?
-  `);
-  const profile = stmt.get(name);
-  if (profile) {
-    profile.selectors = JSON.parse(profile.selectors);
+  if (!db) return null;
+  try {
+    const stmt = db.prepare(`
+      SELECT * FROM profiles WHERE name = ?
+    `);
+    const profile = stmt.get(name);
+    if (profile && profile.selectors) {
+      try {
+        profile.selectors = JSON.parse(profile.selectors);
+      } catch {
+        profile.selectors = {};
+      }
+    }
+    return profile || null;
+  } catch (err) {
+    return null;
   }
-  return profile;
 }
 
 /**
@@ -339,13 +452,22 @@ export function getProfileByName(name) {
  * @returns {Array}
  */
 export function getAllProfiles() {
-  const stmt = db.prepare(`
-    SELECT * FROM profiles ORDER BY created_at DESC
-  `);
-  return stmt.all().map(p => {
-    p.selectors = JSON.parse(p.selectors);
-    return p;
-  });
+  if (!db) return [];
+  try {
+    const stmt = db.prepare(`
+      SELECT * FROM profiles ORDER BY created_at DESC
+    `);
+    return stmt.all().map(p => {
+      try {
+        p.selectors = JSON.parse(p.selectors);
+      } catch {
+        p.selectors = {};
+      }
+      return p;
+    });
+  } catch (err) {
+    return [];
+  }
 }
 
 /**
@@ -355,21 +477,24 @@ export function getAllProfiles() {
  */
 export function getCachedPage(url) {
   if (!db) return null;
-  const stmt = db.prepare(`
-    SELECT * FROM http_cache WHERE url = ?
-  `);
-  const cached = stmt.get(url);
-  if (cached && cached.html) {
-    if (Buffer.isBuffer(cached.html)) {
-      try {
-        cached.html = zlib.gunzipSync(cached.html).toString('utf-8');
-      } catch (err) {
-        console.error(`Error decompressing cached page for ${url}:`, err.message);
-        cached.html = cached.html.toString('utf-8');
+  try {
+    const stmt = db.prepare(`
+      SELECT * FROM http_cache WHERE url = ?
+    `);
+    const cached = stmt.get(url);
+    if (cached && cached.html) {
+      if (Buffer.isBuffer(cached.html)) {
+        try {
+          cached.html = zlib.gunzipSync(cached.html).toString('utf-8');
+        } catch (err) {
+          cached.html = cached.html.toString('utf-8');
+        }
       }
     }
+    return cached;
+  } catch (err) {
+    return null;
   }
-  return cached;
 }
 
 /**
@@ -381,17 +506,21 @@ export function getCachedPage(url) {
  */
 export function saveCachedPage(url, html, etag, lastModified) {
   if (!db) return;
-  const compressedHtml = zlib.gzipSync(Buffer.from(html, 'utf-8'));
-  const stmt = db.prepare(`
-    INSERT INTO http_cache (url, html, etag, last_modified, cached_at)
-    VALUES (?, ?, ?, ?, ?)
-    ON CONFLICT(url) DO UPDATE SET
-      html = excluded.html,
-      etag = excluded.etag,
-      last_modified = excluded.last_modified,
-      cached_at = excluded.cached_at
-  `);
-  stmt.run(url, compressedHtml, etag || null, lastModified || null, new Date().toISOString());
+  try {
+    const compressedHtml = zlib.gzipSync(Buffer.from(html, 'utf-8'));
+    const stmt = db.prepare(`
+      INSERT INTO http_cache (url, html, etag, last_modified, cached_at)
+      VALUES (?, ?, ?, ?, ?)
+      ON CONFLICT(url) DO UPDATE SET
+        html = excluded.html,
+        etag = excluded.etag,
+        last_modified = excluded.last_modified,
+        cached_at = excluded.cached_at
+    `);
+    stmt.run(url, compressedHtml, etag || null, lastModified || null, new Date().toISOString());
+  } catch (err) {
+    console.warn(`[Cache Warning] Could not cache page for ${url}:`, err.message);
+  }
 }
 
 /**
@@ -399,43 +528,65 @@ export function saveCachedPage(url, html, etag, lastModified) {
  */
 export function saveSpiderCheckpoint(jobId, seedUrl, state) {
   if (!db) return;
-  const stmt = db.prepare(`
-    INSERT INTO spider_checkpoints (job_id, seed_url, state, updated_at)
-    VALUES (?, ?, ?, ?)
-    ON CONFLICT(job_id) DO UPDATE SET
-      state = excluded.state,
-      updated_at = excluded.updated_at
-  `);
-  stmt.run(jobId, seedUrl, JSON.stringify(state), new Date().toISOString());
+  try {
+    const stmt = db.prepare(`
+      INSERT INTO spider_checkpoints (job_id, seed_url, state, updated_at)
+      VALUES (?, ?, ?, ?)
+      ON CONFLICT(job_id) DO UPDATE SET
+        state = excluded.state,
+        updated_at = excluded.updated_at
+    `);
+    stmt.run(jobId, seedUrl, JSON.stringify(state), new Date().toISOString());
+  } catch (err) {
+    console.warn(`[Checkpoint Error] Could not save checkpoint for job ${jobId}:`, err.message);
+  }
 }
 
 export function getSpiderCheckpoint(jobId) {
   if (!db) return null;
-  const stmt = db.prepare(`SELECT * FROM spider_checkpoints WHERE job_id = ?`);
-  const row = stmt.get(jobId);
-  if (row && row.state) {
-    return { ...row, state: JSON.parse(row.state) };
+  try {
+    const stmt = db.prepare(`SELECT * FROM spider_checkpoints WHERE job_id = ?`);
+    const row = stmt.get(jobId);
+    if (row && row.state) {
+      try {
+        return { ...row, state: JSON.parse(row.state) };
+      } catch (parseErr) {
+        console.warn(`[Checkpoint Recovery] Corrupted JSON in checkpoint for job ${jobId}:`, parseErr.message);
+        return null;
+      }
+    }
+    return null;
+  } catch (err) {
+    console.warn(`[Checkpoint Error] Could not retrieve checkpoint for ${jobId}:`, err.message);
+    return null;
   }
-  return null;
 }
 
 export function deleteSpiderCheckpoint(jobId) {
   if (!db) return;
-  const stmt = db.prepare(`DELETE FROM spider_checkpoints WHERE job_id = ?`);
-  stmt.run(jobId);
+  try {
+    const stmt = db.prepare(`DELETE FROM spider_checkpoints WHERE job_id = ?`);
+    stmt.run(jobId);
+  } catch (err) {
+    console.warn(`[Checkpoint Error] Could not delete checkpoint for ${jobId}:`, err.message);
+  }
 }
 
 export function getAllSpiderCheckpoints() {
   if (!db) return [];
-  const stmt = db.prepare(`SELECT job_id, seed_url, state, updated_at FROM spider_checkpoints ORDER BY updated_at DESC`);
-  const rows = stmt.all();
-  return rows.map(row => {
-    try {
-      return { ...row, state: JSON.parse(row.state) };
-    } catch (e) {
-      return row;
-    }
-  });
+  try {
+    const stmt = db.prepare(`SELECT job_id, seed_url, state, updated_at FROM spider_checkpoints ORDER BY updated_at DESC`);
+    const rows = stmt.all();
+    return rows.map(row => {
+      try {
+        return { ...row, state: JSON.parse(row.state) };
+      } catch (e) {
+        return row;
+      }
+    });
+  } catch (err) {
+    return [];
+  }
 }
 
 /**
@@ -443,50 +594,70 @@ export function getAllSpiderCheckpoints() {
  */
 export function saveElementFingerprint(domain, name, signature, confidence = 1.0) {
   if (!db) return;
-  const stmt = db.prepare(`
-    INSERT INTO element_fingerprints (domain, name, signature, confidence, updated_at)
-    VALUES (?, ?, ?, ?, ?)
-    ON CONFLICT(domain, name) DO UPDATE SET
-      signature = excluded.signature,
-      confidence = excluded.confidence,
-      updated_at = excluded.updated_at
-  `);
-  stmt.run(domain, name, JSON.stringify(signature), confidence, new Date().toISOString());
+  try {
+    const stmt = db.prepare(`
+      INSERT INTO element_fingerprints (domain, name, signature, confidence, updated_at)
+      VALUES (?, ?, ?, ?, ?)
+      ON CONFLICT(domain, name) DO UPDATE SET
+        signature = excluded.signature,
+        confidence = excluded.confidence,
+        updated_at = excluded.updated_at
+    `);
+    stmt.run(domain, name, JSON.stringify(signature), confidence, new Date().toISOString());
+  } catch (err) {
+    console.warn(`[Fingerprint Error] Could not save fingerprint for ${domain}/${name}:`, err.message);
+  }
 }
 
 export function getElementFingerprint(domain, name) {
   if (!db) return null;
-  const stmt = db.prepare(`SELECT * FROM element_fingerprints WHERE domain = ? AND name = ?`);
-  const row = stmt.get(domain, name);
-  if (row && row.signature) {
-    return { ...row, signature: JSON.parse(row.signature) };
+  try {
+    const stmt = db.prepare(`SELECT * FROM element_fingerprints WHERE domain = ? AND name = ?`);
+    const row = stmt.get(domain, name);
+    if (row && row.signature) {
+      try {
+        return { ...row, signature: JSON.parse(row.signature) };
+      } catch {
+        return null;
+      }
+    }
+    return null;
+  } catch (err) {
+    return null;
   }
-  return null;
 }
 
 export function getAllElementFingerprints(domain = null) {
   if (!db) return [];
-  let rows = [];
-  if (domain) {
-    const stmt = db.prepare(`SELECT * FROM element_fingerprints WHERE domain = ? ORDER BY updated_at DESC`);
-    rows = stmt.all(domain);
-  } else {
-    const stmt = db.prepare(`SELECT * FROM element_fingerprints ORDER BY updated_at DESC`);
-    rows = stmt.all();
-  }
-  return rows.map(row => {
-    try {
-      return { ...row, signature: JSON.parse(row.signature) };
-    } catch (e) {
-      return row;
+  try {
+    let rows = [];
+    if (domain) {
+      const stmt = db.prepare(`SELECT * FROM element_fingerprints WHERE domain = ? ORDER BY updated_at DESC`);
+      rows = stmt.all(domain);
+    } else {
+      const stmt = db.prepare(`SELECT * FROM element_fingerprints ORDER BY updated_at DESC`);
+      rows = stmt.all();
     }
-  });
+    return rows.map(row => {
+      try {
+        return { ...row, signature: JSON.parse(row.signature) };
+      } catch (e) {
+        return row;
+      }
+    });
+  } catch (err) {
+    return [];
+  }
 }
 
 export function deleteElementFingerprint(id) {
   if (!db) return;
-  const stmt = db.prepare(`DELETE FROM element_fingerprints WHERE id = ?`);
-  stmt.run(id);
+  try {
+    const stmt = db.prepare(`DELETE FROM element_fingerprints WHERE id = ?`);
+    stmt.run(id);
+  } catch (err) {
+    console.warn(`[Fingerprint Error] Could not delete fingerprint ${id}:`, err.message);
+  }
 }
 
 /**
@@ -496,18 +667,22 @@ export function deleteElementFingerprint(id) {
  */
 export function getLlmCache(hash) {
   if (!db) return null;
-  const stmt = db.prepare(`
-    SELECT * FROM llm_cache WHERE content_hash = ?
-  `);
-  const record = stmt.get(hash);
-  if (record && record.result) {
-    try {
-      return JSON.parse(record.result);
-    } catch (e) {
-      return null;
+  try {
+    const stmt = db.prepare(`
+      SELECT * FROM llm_cache WHERE content_hash = ?
+    `);
+    const record = stmt.get(hash);
+    if (record && record.result) {
+      try {
+        return JSON.parse(record.result);
+      } catch (e) {
+        return null;
+      }
     }
+    return null;
+  } catch (err) {
+    return null;
   }
-  return null;
 }
 
 /**
@@ -519,16 +694,20 @@ export function getLlmCache(hash) {
  */
 export function saveLlmCache(hash, schemaName, instruction, result) {
   if (!db) return;
-  const stmt = db.prepare(`
-    INSERT INTO llm_cache (content_hash, schema_used, instruction, result, cached_at)
-    VALUES (?, ?, ?, ?, ?)
-    ON CONFLICT(content_hash) DO UPDATE SET
-      schema_used = excluded.schema_used,
-      instruction = excluded.instruction,
-      result = excluded.result,
-      cached_at = excluded.cached_at
-  `);
-  stmt.run(hash, schemaName, instruction || '', JSON.stringify(result), new Date().toISOString());
+  try {
+    const stmt = db.prepare(`
+      INSERT INTO llm_cache (content_hash, schema_used, instruction, result, cached_at)
+      VALUES (?, ?, ?, ?, ?)
+      ON CONFLICT(content_hash) DO UPDATE SET
+        schema_used = excluded.schema_used,
+        instruction = excluded.instruction,
+        result = excluded.result,
+        cached_at = excluded.cached_at
+    `);
+    stmt.run(hash, schemaName, instruction || '', JSON.stringify(result), new Date().toISOString());
+  } catch (err) {
+    console.warn(`[LLM Cache Warning] Could not cache LLM result for hash ${hash}:`, err.message);
+  }
 }
 
 /**

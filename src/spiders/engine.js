@@ -77,13 +77,21 @@ export class CrawlEngine {
     };
   }
 
-  /**
-   * Normalizes URL, strips tracking parameters, and removes hash tags.
-   */
-  cleanUrl(urlStr) {
+  cleanUrl(urlStr, baseUrl = null) {
     if (!urlStr) return null;
+    const trimmed = String(urlStr).trim();
+    if (
+      !trimmed || 
+      trimmed.startsWith('#') || 
+      trimmed.startsWith('javascript:') || 
+      trimmed.startsWith('mailto:') || 
+      trimmed.startsWith('tel:') || 
+      trimmed.startsWith('data:')
+    ) {
+      return null;
+    }
     try {
-      const u = new URL(urlStr);
+      const u = baseUrl ? new URL(trimmed, baseUrl) : new URL(trimmed);
       u.hash = '';
       
       // Strip common analytics and tracking parameters
@@ -367,6 +375,10 @@ export class CrawlEngine {
             timeout: this.options.timeout ? parseInt(this.options.timeout, 10) : 15000
           });
 
+          if (response.status >= 400) {
+            throw new Error(`HTTP ${response.status}: Received error response for ${targetUrl}`);
+          }
+
           // ─── Case 1: Processing a Listing / Pagination Page ───
           if (isListing) {
             // 1. Extract and enqueue all article links matching topic
@@ -454,7 +466,7 @@ export class CrawlEngine {
             if (!this.topicProfile.slug && item.depth < this.maxDepth) {
               const links = response.css('a').attribs('href');
               for (const href of links) {
-                const resolvedUrl = this.cleanUrl(href);
+                const resolvedUrl = this.cleanUrl(href, targetUrl);
                 if (resolvedUrl && this.isAllowedUrl(resolvedUrl) && !this.visited.has(resolvedUrl) && !this.queue.some(q => q.url === resolvedUrl)) {
                   const priorityInfo = prioritizeUrl(resolvedUrl);
                   if (priorityInfo.classification !== 'DISCARD') {
@@ -466,6 +478,18 @@ export class CrawlEngine {
                   }
                 }
               }
+            }
+
+            // Fallback recovery: If the entrypoint yielded zero articles and queues are empty, fall back to seed URL
+            if (
+              articleLinks.length === 0 &&
+              this.articleQueue.length === 0 &&
+              this.discoveryQueue.length === 0 &&
+              this.options.fallbackSeedUrl &&
+              !this.visited.has(this.options.fallbackSeedUrl)
+            ) {
+              logMessage(`⚠️ Entrypoint listing (${targetUrl}) yielded no articles. Falling back to seed URL: ${this.options.fallbackSeedUrl}`);
+              this.discoveryQueue.push({ url: this.options.fallbackSeedUrl, depth: 0, type: 'LISTING' });
             }
 
           } else {
@@ -535,7 +559,7 @@ export class CrawlEngine {
             if ((!this.topicProfile || !this.topicProfile.slug) && item.depth < this.maxDepth) {
               const links = response.css('a').attribs('href');
               for (const href of links) {
-                const resolvedUrl = this.cleanUrl(href);
+                const resolvedUrl = this.cleanUrl(href, targetUrl);
                 if (resolvedUrl && this.isAllowedUrl(resolvedUrl) && !this.visited.has(resolvedUrl) && !this.queue.some(q => q.url === resolvedUrl)) {
                   const priorityInfo = prioritizeUrl(resolvedUrl);
                   if (priorityInfo.classification !== 'DISCARD') {
@@ -570,6 +594,16 @@ export class CrawlEngine {
             } catch (dbErr) {}
           }
           logMessage(`✖ Failed to crawl ${targetUrl}: ${err.message}`);
+
+          // If a speculative entrypoint failed (missing link or 404), fall back to seed URL if configured
+          if (
+            this.options.fallbackSeedUrl && 
+            !this.visited.has(this.options.fallbackSeedUrl) && 
+            !this.discoveryQueue.some(q => q.url === this.options.fallbackSeedUrl)
+          ) {
+            logMessage(`⚠️ Entrypoint unreachable (${targetUrl}). Falling back to seed URL: ${this.options.fallbackSeedUrl}`);
+            this.discoveryQueue.push({ url: this.options.fallbackSeedUrl, depth: 0, type: 'LISTING' });
+          }
         }
 
         onProgress({

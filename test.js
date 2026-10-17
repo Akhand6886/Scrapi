@@ -10,7 +10,8 @@ const testFiles = [
   'test_spider.js',
   'test_optimizations.js',
   'test_category_crawl.js',
-  'test_topic_crawl.js'
+  'test_topic_crawl.js',
+  'test_reliability_audit.js'
 ];
 
 async function runAll() {

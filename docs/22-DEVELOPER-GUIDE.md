@@ -21,19 +21,19 @@ Scrapi is designed around several core engineering principles:
 | Subsystem | Directory | Key Files | Responsibility |
 |---|---|---|---|
 | **Core** | `src/` | [`scraper.js`](../src/scraper.js), [`cli.js`](../src/cli.js), [`polyfill.js`](../src/polyfill.js) | Main coordinator, CLI command routing, global polyfills. |
-| **Fetchers** | `src/fetcher/` | [`base.js`](../src/fetcher/base.js), [`static.js`](../src/fetcher/static.js), [`dynamic.js`](../src/fetcher/dynamic.js), [`stealthy.js`](../src/fetcher/stealthy.js), [`pool.js`](../src/fetcher/pool.js) | Network request handlers, Playwright wrappers, Keep-Alive pooling. |
-| **Parser** | `src/parser/` | [`response.js`](../src/parser/response.js), [`adaptor.js`](../src/parser/adaptor.js), [`markdown.js`](../src/parser/markdown.js) | Cheerio DOM traversal, CSS/XPath query engines, Turndown Markdown. |
-| **Spider** | `src/spider/` | [`spider.js`](../src/spider/spider.js), [`topicCrawler.js`](../src/spider/topicCrawler.js), [`paginationEngine.js`](../src/spider/paginationEngine.js), [`sitemapEngine.js`](../src/spider/sitemapEngine.js) | Crawling frontiers, sitemap parsers, pagination generators. |
-| **Adaptive** | `src/adaptive/` | [`decisionTree.js`](../src/adaptive/decisionTree.js), [`selfHealing.js`](../src/adaptive/selfHealing.js), [`bandit.js`](../src/adaptive/bandit.js) | CART classification trees, 64-bit SimHash, Bayesian multi-armed bandit. |
-| **Storage** | `src/db/` | [`sqliteStorage.js`](../src/db/sqliteStorage.js) | SQLite schema, WAL mode, migrations, profile & cache tables. |
-| **Dashboard** | `src/dashboard/` | [`server.js`](../src/dashboard/server.js), [`src/ui/app.jsx`](../src/ui/app.jsx) | Express API, iframe visual picker proxy, React 18 interface. |
+| **Fetchers** | `src/fetchers/` | [`base.js`](../src/fetchers/base.js), [`static.js`](../src/fetchers/static.js), [`dynamic.js`](../src/fetchers/dynamic.js), [`stealth.js`](../src/fetchers/stealth.js), [`index.js`](../src/fetchers/index.js) | Network request handlers, Playwright wrappers, Keep-Alive pooling. |
+| **Parser** | `src/parser/` | [`adaptor.js`](../src/parser/adaptor.js), [`selector.js`](../src/parser/selector.js), [`simhash.js`](../src/parser/simhash.js), [`adaptive.js`](../src/parser/adaptive.js), [`markdown.js`](../src/parser/markdown.js) | Cheerio DOM traversal, CSS/XPath query engines, Turndown Markdown. |
+| **Spiders** | `src/spiders/` | [`spider.js`](../src/spiders/spider.js), [`engine.js`](../src/spiders/engine.js), [`topic_crawler.js`](../src/spiders/topic_crawler.js), [`topic_matcher.js`](../src/spiders/topic_matcher.js), [`pagination.js`](../src/spiders/pagination.js), [`sitemap.js`](../src/spiders/sitemap.js) | Crawling frontiers, sitemap parsers, pagination generators. |
+| **Trees & ML** | `src/trees/` | [`engine.js`](../src/trees/engine.js), [`tier_router.js`](../src/trees/tier_router.js), [`bandit.js`](../src/trees/bandit.js), [`crawl_prioritizer.js`](../src/trees/crawl_prioritizer.js) | CART classification trees, 64-bit SimHash, Bayesian multi-armed bandit. |
+| **Storage** | `src/` | [`storage.js`](../src/storage.js) | SQLite schema, WAL mode, migrations, profile & cache tables. |
+| **Dashboard** | `src/ui/` | [`server.js`](../src/ui/server.js), [`app.jsx`](../src/ui/app.jsx), [`picker.js`](../src/ui/picker.js) | Express API, iframe visual picker proxy, React interface. |
 | **MCP** | `src/mcp/` | [`server.js`](../src/mcp/server.js) | Model Context Protocol stdio server for AI coding assistants. |
 
 ---
 
 ## 3. Extending the Fetcher Subsystem
 
-All fetchers inherit from `BaseFetcher` located in [`src/fetcher/base.js`](../src/fetcher/base.js).
+All fetchers inherit from `BaseFetcher` located in [`src/fetchers/base.js`](../src/fetchers/base.js).
 
 ### 3.1 Step 1: Implement a Custom Fetcher
 To create a new fetcher (e.g., using an external proxy rotating service or specialized headless engine):
@@ -79,7 +79,7 @@ export class ProxyFetcher extends BaseFetcher {
 ```
 
 ### 3.2 Step 2: Register in `FetcherPool`
-Edit [`src/fetcher/pool.js`](../src/fetcher/pool.js) to instantiate and provide the new fetcher:
+Edit [`src/fetchers/index.js`](../src/fetchers/index.js) to instantiate and provide the new fetcher:
 
 ```javascript
 import { ProxyFetcher } from './proxyFetcher.js';
@@ -123,14 +123,14 @@ To adjust weights or add new scoring factors (such as image density or header ta
 
 ## 5. Extending Crawlers & Spiders
 
-The dual-frontier crawler lives in [`src/spider/topicCrawler.js`](../src/spider/topicCrawler.js).
+The dual-frontier crawler lives in [`src/spiders/topic_crawler.js`](../src/spiders/topic_crawler.js).
 
 ### 5.1 Customizing Topic Relevance Heuristics
-Topic matching is performed by `TopicMatcher` in [`src/spider/topicMatcher.js`](../src/spider/topicMatcher.js). It evaluates URL paths, slug tokens, anchor texts, and headline keywords.
+Topic matching is performed by `TopicMatcher` in [`src/spiders/topic_matcher.js`](../src/spiders/topic_matcher.js). It evaluates URL paths, slug tokens, anchor texts, and headline keywords.
 
 To implement a custom topic rule:
 ```javascript
-// src/spider/topicMatcher.js
+// src/spiders/topic_matcher.js
 isUrlRelevant(url, topicKeywords) {
   const parsed = new URL(url);
   const segments = parsed.pathname.toLowerCase().split(/[\/-]/);
@@ -139,7 +139,7 @@ isUrlRelevant(url, topicKeywords) {
 ```
 
 ### 5.2 Enhancing Pagination Detection
-Pagination patterns are evaluated in [`src/spider/paginationEngine.js`](../src/spider/paginationEngine.js). It inspects:
+Pagination patterns are evaluated in [`src/spiders/pagination.js`](../src/spiders/pagination.js). It inspects:
 - `rel="next"` `<link>` or `<a>` tags.
 - URL query parameters (`?p=2`, `?page=2`, `?offset=20`).
 - Path patterns (`/page/2/`, `/p/2`).
@@ -222,8 +222,8 @@ The web dashboard is built with React 18 and compiled using `esbuild`.
 ## 9. Contribution Checklist
 
 Before submitting code changes:
-- [ ] Ensure **all 7 test suites pass** via `npm test`.
+- [ ] Ensure **all 8 test suites pass** via `npm test`.
 - [ ] Preserve Node.js 18 compatibility (`src/polyfill.js`).
 - [ ] Do not add unneeded runtime dependencies; use native Node.js APIs whenever possible.
-- [ ] Ensure any new database schemas or columns include migrations in [`src/db/sqliteStorage.js`](../src/db/sqliteStorage.js).
+- [ ] Ensure any new database schemas or columns include migrations in [`src/storage.js`](../src/storage.js).
 - [ ] If modifying the React dashboard, recompile via `npm run build:ui`.

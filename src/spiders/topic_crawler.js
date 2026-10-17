@@ -38,14 +38,16 @@ export class TopicCrawler {
       const categories = await discoverCategories(websiteUrl);
       // 1. Direct match on category name
       for (const cat of categories) {
-        if (cat.name.toLowerCase() === profile.raw.toLowerCase() || cat.name.toLowerCase() === profile.slug) {
+        const catName = (cat.name || '').toLowerCase();
+        if (catName === profile.raw.toLowerCase() || catName === profile.slug) {
           return cat.url;
         }
       }
 
       // 2. Token match on category url or name
       for (const cat of categories) {
-        if (TopicMatcher.isTopicMatch(cat.url, profile) || profile.tokens.some(t => cat.name.toLowerCase().includes(t))) {
+        const catName = (cat.name || '').toLowerCase();
+        if (TopicMatcher.isTopicMatch(cat.url, profile) || profile.tokens.some(t => catName.includes(t))) {
           return cat.url;
         }
       }
@@ -81,7 +83,8 @@ export class TopicCrawler {
       topic: topicName,
       category: topicName,
       jobId,
-      exhaustive: this.options.exhaustive
+      exhaustive: this.options.exhaustive,
+      fallbackSeedUrl: websiteUrl !== entrypoint ? websiteUrl : null
     });
 
     onProgress({

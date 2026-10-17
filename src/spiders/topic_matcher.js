@@ -210,31 +210,65 @@ export class TopicMatcher {
 
     // Selectors targeting article cards/items
     const articleContainers = $(
-      'article, .post, .entry, .card, .post-item, .article-card, .item, ' +
-      'main a, [role="main"] a, .content a, #content a, .posts a, .articles a'
+      'article, .post, .entry, .card, .post-item, .article-card, .item'
     );
 
-    // If specific containers found, extract from them
-    const targetSelection = articleContainers.length > 0 ? articleContainers : $('a');
+    const candidateAnchors = [];
+    if (articleContainers.length > 0) {
+      articleContainers.each((_, elem) => {
+        // Collect heading links first (highest probability of being the article canonical link)
+        const headingAnchors = $(elem).find('h1 a, h2 a, h3 a, h4 a, .title a, .entry-title a, .post-title a, a.entry-title-link');
+        if (headingAnchors.length > 0) {
+          headingAnchors.each((_, a) => candidateAnchors.push($(a)));
+        }
+        // Also collect all other anchors within the card/container
+        $(elem).find('a').each((_, a) => {
+          candidateAnchors.push($(a));
+        });
+      });
+    }
 
-    targetSelection.each((_, elem) => {
-      let anchor = $(elem).is('a') ? $(elem) : $(elem).find('a').first();
-      let href = anchor.attr('href');
-      if (!href) return;
+    // Include main content area links
+    $('main a, [role="main"] a, .content a, #content a, .posts a, .articles a').each((_, a) => {
+      candidateAnchors.push($(a));
+    });
 
-      if (href.startsWith('#') || href.startsWith('javascript:') || href.startsWith('mailto:')) {
+    // Fallback: If no candidate anchors collected from structural containers, inspect all page anchors
+    if (candidateAnchors.length === 0) {
+      $('a').each((_, a) => candidateAnchors.push($(a)));
+    }
+
+    const processAnchor = (anchor) => {
+      let rawHref = anchor.attr('href');
+      if (!rawHref) return;
+
+      const trimmedHref = rawHref.trim();
+      if (
+        !trimmedHref || 
+        trimmedHref.startsWith('#') || 
+        trimmedHref.startsWith('javascript:') || 
+        trimmedHref.startsWith('mailto:') || 
+        trimmedHref.startsWith('tel:') ||
+        trimmedHref.startsWith('data:')
+      ) {
         return;
       }
 
       try {
-        const resolved = new URL(href, baseUrl).href;
-        if (new URL(resolved).origin !== origin) return;
-        if (resolved === baseUrl || resolved === `${baseUrl}/`) return;
+        const resolved = new URL(trimmedHref, baseUrl).href;
+        const resolvedUrlObj = new URL(resolved);
+        if (resolvedUrlObj.origin !== origin) return;
+
+        // Skip same-page links
+        const cleanBase = baseUrl.split('#')[0].replace(/\/$/, '');
+        const cleanResolved = resolved.split('#')[0].replace(/\/$/, '');
+        if (cleanResolved === cleanBase) return;
+
         if (this.isIgnoredNoise(resolved)) return;
 
-        // Skip pagination and category index links as article candidates
-        if (/[?&](page|p)=\d+|\/page\/\d+/i.test(resolved)) return;
-        if (/\/(category|tag|author)\/[^/]+\/?$/i.test(new URL(resolved).pathname)) return;
+        // Skip pagination, archive indices, and tag/category root index links as article candidates
+        if (/[?&](page|p|offset|cursor)=\d+|\/page\/\d+/i.test(resolved)) return;
+        if (/\/(category|tag|author|topics|sections|archive|archives)\/[^/]+\/?$/i.test(resolvedUrlObj.pathname)) return;
 
         // Verify with topic matcher
         const isMatch = this.isTopicMatch(resolved, profile, {
@@ -247,7 +281,18 @@ export class TopicMatcher {
           discoveredUrls.add(resolved);
         }
       } catch {}
-    });
+    };
+
+    for (const anchor of candidateAnchors) {
+      processAnchor(anchor);
+    }
+
+    // If candidate containers yielded zero matches, run fallback over all anchors on the page
+    if (discoveredUrls.size === 0 && candidateAnchors.length > 0) {
+      $('a').each((_, elem) => {
+        processAnchor($(elem));
+      });
+    }
 
     return Array.from(discoveredUrls);
   }
